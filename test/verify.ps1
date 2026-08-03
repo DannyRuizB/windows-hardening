@@ -12,9 +12,11 @@
       * script-block logging: run a unique string through a FRESH PowerShell
         process and find it in event 4104. The engine reads the policy at
         startup, so only a new process can prove the logging is live.
-      * password policy: ask the OS to set a 4-character password on a
-        throwaway local account. It must REFUSE, and then accept a compliant
-        one - the policy is real, not just written down.
+      * password policy: three linked probes on a throwaway local account -
+        creating it with NO password must be refused, the same account with a
+        compliant password must be accepted, and changing that password to a
+        7-character one must be refused again. A refusal only means something
+        next to an acceptance.
 
     Exit code 0 = every check passed.
 
@@ -128,10 +130,16 @@ if ($acct -match 'Lockout threshold:\s+(\d+)' -and [int]$Matches[1] -le 5 -and [
 # minimum we just applied refuses that outright. The check was "broken" by the
 # hardening working - so the refusal became the assertion.
 $probeUser = 'whVerifyProbe'
-$strongPw = 'Vh7#qL2m!Xr9tBw4'
+# EXACTLY 14 characters, and /y on every net.exe call that can prompt. A
+# password LONGER than 14 makes net.exe ask "Computers with Windows prior to
+# Windows 2000 will not be able to use this account. Continue? (Y/N)" - and
+# with no interactive stdin that becomes "No valid response was provided",
+# which looked exactly like a policy refusal. Two belts: a length that does
+# not trigger the prompt, and /y in case someone raises the minimum later.
+$strongPw = 'Vh7#qL2m!Xr9tB'
 $weakPw = 'short1!'
 try {
-    $noPwOut = (net user $probeUser /add 2>&1 | Out-String).Trim()
+    $noPwOut = (net user $probeUser /add /y 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Pass 'the OS REFUSES creating an account with no password (the 14-char minimum bites)'
     } else {
@@ -139,11 +147,11 @@ try {
         $null = net user $probeUser /delete 2>&1
     }
 
-    $addOut = (net user $probeUser $strongPw /add 2>&1 | Out-String).Trim()
+    $addOut = (net user $probeUser $strongPw /add /y 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -eq 0) {
         Pass '...and accepts the same account with a compliant password (the refusal was policy, not breakage)'
 
-        $weakOut = (net user $probeUser $weakPw 2>&1 | Out-String).Trim()
+        $weakOut = (net user $probeUser $weakPw /y 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0) {
             Pass 'changing that password to a 7-character one is REFUSED too (enforced at the point of use)'
         } else {

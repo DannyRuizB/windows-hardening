@@ -90,13 +90,20 @@ The CI does what a reviewer would want to see done:
 `lint.yml` parses every script (the PowerShell equivalent of `bash -n`), runs
 PSScriptAnalyzer, and enforces **pure ASCII**.
 
-### Two gotchas this harness caught on its first run
+### Three gotchas this harness caught on its first day
 
 **A comment broke the parser.** This repo's very first CI run failed on a UTF-8
 em dash *inside a comment*: Windows PowerShell 5.1 reads a `.ps1` without a BOM
 as the system ANSI codepage, the character became mojibake and swallowed the
 closing quote. Every script is pure ASCII now and the lint job fails on any byte
 above 127, so it stays that way.
+
+**`net.exe` asks questions.** A 16-character probe password made `net user`
+prompt *"Computers with Windows prior to Windows 2000 will not be able to use
+this account. Continue? (Y/N)"*, and with no interactive stdin that surfaced as
+`No valid response was provided` — indistinguishable, at a glance, from a policy
+refusal. Fixed with a password of exactly 14 characters *and* `/y`, so neither
+belt alone has to hold.
 
 **The hardening broke its own test, and that became the test.** The first
 `verify.ps1` created its throwaway probe account with a plain `net user /add`
