@@ -118,24 +118,39 @@ if ($acct -match 'Lockout threshold:\s+(\d+)' -and [int]$Matches[1] -le 5 -and [
     Pass "account lockout after $($Matches[1]) bad attempts"
 } else { Fail 'lockout threshold not set to 5 or fewer' }
 
-# The second behavioural check: ask the OS to break its own policy. A weak
-# password must be REFUSED and a compliant one accepted - proving the policy
-# is enforced at the point of use, not merely recorded. The probe account is
-# created and removed here; the finally block runs even on failure.
+# The second behavioural check: ask the OS to break its own policy on a
+# throwaway account. Three linked probes, because a refusal only means
+# something next to an acceptance. The probe account is removed in the
+# finally block, which runs even when an assertion fails.
+#
+# Probe 1 exists because the FIRST version of this check tripped over it: a
+# plain `net user X /add` creates an account with NO password, and the 14-char
+# minimum we just applied refuses that outright. The check was "broken" by the
+# hardening working - so the refusal became the assertion.
 $probeUser = 'whVerifyProbe'
+$strongPw = 'Vh7#qL2m!Xr9tBw4'
+$weakPw = 'short1!'
 try {
-    $null = net user $probeUser /add /y 2>&1
+    $noPwOut = (net user $probeUser /add 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        Fail "could not create the probe account (rc=$LASTEXITCODE) - behavioural password check skipped"
+        Pass 'the OS REFUSES creating an account with no password (the 14-char minimum bites)'
     } else {
-        $weak = (net user $probeUser 'short1!' 2>&1 | Out-String)
-        $weakRc = $LASTEXITCODE
-        $strong = (net user $probeUser 'Vh7#qL2m!Xr9tBw4' 2>&1 | Out-String)
-        $strongRc = $LASTEXITCODE
-        if ($weakRc -ne 0) { Pass 'the OS REFUSES a 7-character password (policy enforced at the point of use)' }
-        else { Fail "a 7-character password was accepted: $($weak.Trim())" }
-        if ($strongRc -eq 0) { Pass '...and accepts a compliant one (the refusal was the policy, not a broken account)' }
-        else { Fail "a compliant password was also refused: $($strong.Trim())" }
+        Fail "an account with NO password was created: $noPwOut"
+        $null = net user $probeUser /delete 2>&1
+    }
+
+    $addOut = (net user $probeUser $strongPw /add 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+        Pass '...and accepts the same account with a compliant password (the refusal was policy, not breakage)'
+
+        $weakOut = (net user $probeUser $weakPw 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            Pass 'changing that password to a 7-character one is REFUSED too (enforced at the point of use)'
+        } else {
+            Fail "a 7-character password was accepted: $weakOut"
+        }
+    } else {
+        Fail "a compliant password was refused as well (rc=$LASTEXITCODE): $addOut"
     }
 } finally {
     $null = net user $probeUser /delete 2>&1

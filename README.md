@@ -77,9 +77,11 @@ The CI does what a reviewer would want to see done:
    - a **fresh** PowerShell process emits a unique marker and it must appear in
      event 4104. The engine reads the logging policy at startup, so an
      in-process check would be a lie;
-   - the OS is asked to set a 7-character password on a throwaway local
-     account. It must **refuse**, then accept a compliant one — proving the
-     policy is enforced at the point of use, not merely recorded.
+   - three linked probes against a throwaway local account: creating it with
+     **no** password must be refused (the 14-character minimum bites), the
+     same account **with** a compliant password must be accepted, and
+     changing that password to a 7-character one must be refused again —
+     proving the policy is enforced at the point of use, not merely recorded.
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -96,6 +98,12 @@ as the system ANSI codepage, the character became mojibake and swallowed the
 closing quote. Every script is pure ASCII now and the lint job fails on any byte
 above 127, so it stays that way.
 
+**The hardening broke its own test, and that became the test.** The first
+`verify.ps1` created its throwaway probe account with a plain `net user /add`
+— which makes an account with *no* password, exactly what the 14-character
+minimum we had just applied refuses. The check failed because the policy
+worked, so the refusal is now the first of three linked assertions.
+
 **`Write-Host` is not capturable.** The first e2e run failed its idempotence gate
 while the script was *perfectly* idempotent — every step reported "already" and
 the summary said `Changes applied: 0`. The bug was in the check: `Write-Host`
@@ -103,14 +111,6 @@ writes straight to the host and never enters the pipeline, so `$out = .\harden.p
 captured nothing and the regex matched nothing. The summary line now goes through
 `Write-Output` as the script's machine-readable contract. Same family as the Linux
 siblings' lesson about capturing the real exit code instead of the pipe's.
-
-### Why ASCII-only is a rule here
-
-This repo's very first CI run failed on a **UTF-8 em dash inside a comment**.
-Windows PowerShell 5.1 reads a `.ps1` without a BOM as the system ANSI codepage,
-so the character became mojibake and swallowed the closing quote — a *parser*
-error caused by a comment. Every script is pure ASCII now, and the lint job
-fails on any byte above 127 so it stays that way.
 
 ## Ground truth before promises
 
