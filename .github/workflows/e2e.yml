@@ -1,0 +1,93 @@
+name: e2e
+
+# The real proof: take a disposable Windows Server runner, harden it FOR REAL,
+# run the script again to prove idempotence, then verify every promise and
+# score the box. Linting checks the script parses; this checks it hardens.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harden-and-verify:
+    name: Harden a disposable Windows node + verify
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show the starting posture (this is what we are fixing)
+        shell: powershell
+        run: |
+          "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          "SMB RequireSecuritySignature: $((Get-SmbServerConfiguration).RequireSecuritySignature)"
+          Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction)" }
+          (net accounts) | Select-String 'Minimum password length|history'
+
+      # Most offenders here are NATURAL: the runner ships SMB signing off,
+      # LLMNR/NetBIOS enabled, no PowerShell logging, password length 0. Two
+      # knobs already hold a good value, so plant the bad one to prove the
+      # step does the work instead of confirming a default (the tautology trap
+      # the Linux siblings' step 30 taught us).
+      - name: Plant the offenders that would otherwise be tautological
+        shell: powershell
+        run: |
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name NoLMHash `
+            -Value 0 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
+            -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
+          "planted NoLMHash=0 and WDigest UseLogonCredential=1"
+
+      - name: Dry run changes nothing
+        shell: powershell
+        run: |
+          $before = (Get-SmbServerConfiguration).RequireSecuritySignature
+          .\harden.ps1 -DryRun
+          $after = (Get-SmbServerConfiguration).RequireSecuritySignature
+          if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
+          $wd = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential).UseLogonCredential
+          if ($wd -ne 1) { throw "dry run changed WDigest to $wd" }
+          "dry run left the planted offenders alone"
+
+      - name: "First pass: harden the node for real"
+        shell: powershell
+        run: .\harden.ps1 -Yes
+
+      # A correct second pass must find nothing to do. The script counts real
+      # changes, so the contract is machine-checkable without hashing files.
+      - name: "Second pass: idempotence (zero changes)"
+        shell: powershell
+        run: |
+          $out = .\harden.ps1 -Yes | Out-String
+          $out
+          if ($out -notmatch 'Changes applied:\s*0\b') {
+            throw "harden.ps1 is not idempotent - the second pass reported changes"
+          }
+          "Idempotent: the second pass applied 0 changes."
+
+      - name: Verify every promise
+        shell: powershell
+        run: .\test\verify.ps1
+
+      - name: Score the box
+        shell: powershell
+        run: .\test\audit.ps1
+
+      # Skipping a step must leave its knob exactly as planted while the rest
+      # of the baseline still applies - the scenario tests of the Bash sibling,
+      # in miniature until they get their own script.
+      - name: Flag behaviour (-NoWDigest keeps the planted offender)
+        shell: powershell
+        run: |
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
+            -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
+          .\harden.ps1 -NoWDigest -Yes | Out-Null
+          $wd = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential).UseLogonCredential
+          if ($wd -ne 1) { throw "-NoWDigest should have left UseLogonCredential=1, found $wd" }
+          $smb = (Get-SmbServerConfiguration).RequireSecuritySignature
+          if (-not $smb) { throw "the rest of the baseline should still apply, SMB signing is $smb" }
+          "-NoWDigest skipped its step and the rest still applied"

@@ -1,0 +1,79 @@
+name: lint
+
+# Static checks on every push and PR: the scripts parse, PSScriptAnalyzer is
+# happy, and no file smuggles in a non-ASCII byte. No host is touched.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Parse + PSScriptAnalyzer + ASCII
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # This repo's very first CI failure was a UTF-8 em dash in a comment:
+      # Windows PowerShell 5.1 reads a .ps1 without a BOM as the system ANSI
+      # codepage, so the character became mojibake and took the closing quote
+      # with it - a PARSER error from a comment. ASCII-only is the rule now,
+      # and this check is why it stays true.
+      - name: Every .ps1 must be pure ASCII
+        shell: powershell
+        run: |
+          $bad = @()
+          foreach ($f in Get-ChildItem -Recurse -Filter *.ps1) {
+            $bytes = [IO.File]::ReadAllBytes($f.FullName)
+            for ($i = 0; $i -lt $bytes.Length; $i++) {
+              if ($bytes[$i] -gt 127) {
+                $bad += "$($f.FullName) byte $i = 0x$('{0:X2}' -f $bytes[$i])"
+                break
+              }
+            }
+          }
+          if ($bad.Count -gt 0) {
+            $bad | ForEach-Object { Write-Host "::error::non-ASCII byte: $_" }
+            throw "non-ASCII bytes found in $($bad.Count) file(s) - PowerShell 5.1 will mis-read them"
+          }
+          "All .ps1 files are pure ASCII"
+
+      - name: Parse every script (the PowerShell equivalent of bash -n)
+        shell: powershell
+        run: |
+          $failed = 0
+          foreach ($f in Get-ChildItem -Recurse -Filter *.ps1) {
+            $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            if ($errs.Count -gt 0) {
+              $failed++
+              foreach ($e in $errs) { Write-Host "::error file=$($f.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+            } else { "OK   $($f.Name)" }
+          }
+          if ($failed -gt 0) { throw "$failed script(s) failed to parse" }
+
+      - name: Install PSScriptAnalyzer
+        shell: powershell
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          (Get-Module -ListAvailable PSScriptAnalyzer)[0].Version.ToString()
+
+      - name: PSScriptAnalyzer
+        shell: powershell
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error, Warning
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+            $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+            if ($errors) { throw "PSScriptAnalyzer reported $($errors.Count) error(s)" }
+            Write-Host "::warning::PSScriptAnalyzer reported $($results.Count) warning(s)"
+          } else {
+            'PSScriptAnalyzer: clean'
+          }
