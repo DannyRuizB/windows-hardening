@@ -25,10 +25,18 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 
-$Script:P = 0; $Script:W = 0; $Script:F = 0
-function P { param([string]$m) Write-Host "  PASS  $m" -ForegroundColor Green; $Script:P++ }
-function W { param([string]$m, [string]$fix) Write-Host "  WARN  $m" -ForegroundColor Yellow; Write-Host "        -> $fix" -ForegroundColor DarkGray; $Script:W++ }
-function F { param([string]$m, [string]$fix) Write-Host "  FAIL  $m" -ForegroundColor Red; Write-Host "        -> $fix" -ForegroundColor DarkGray; $Script:F++ }
+# Counter names are spelled out ON PURPOSE. They used to be $Script:P /
+# $Script:W / $Script:F, and a perfectly innocent `$p = Get-NetFirewallProfile`
+# in the firewall section SILENTLY overwrote the PASS counter: PowerShell
+# variable names are case-insensitive, so $p IS $Script:P. Every later PASS
+# then threw "The '++' operator works only on numbers" and the final score
+# printed as a CIM object with an empty percentage - while the job still went
+# green, because the audit only fails on FAIL. Long names, and a type guard at
+# the bottom, so this can never fail quietly again.
+$Script:PassCount = 0; $Script:WarnCount = 0; $Script:FailCount = 0
+function P { param([string]$m) Write-Host "  PASS  $m" -ForegroundColor Green; $Script:PassCount++ }
+function W { param([string]$m, [string]$fix) Write-Host "  WARN  $m" -ForegroundColor Yellow; Write-Host "        -> $fix" -ForegroundColor DarkGray; $Script:WarnCount++ }
+function F { param([string]$m, [string]$fix) Write-Host "  FAIL  $m" -ForegroundColor Red; Write-Host "        -> $fix" -ForegroundColor DarkGray; $Script:FailCount++ }
 
 function Get-Reg {
     param([string]$Path, [string]$Name)
@@ -85,10 +93,10 @@ else { F "NetBIOS still enabled on $($loose.Count) interface(s)" 'run harden.ps1
 
 Write-Host '-- Firewall --------------------------------------------------'
 foreach ($name in @('Domain', 'Private', 'Public')) {
-    $p = Get-NetFirewallProfile -Name $name
-    if ($p.Enabled -eq $true -and $p.DefaultInboundAction -eq 'Block') { P "$name profile: on, inbound denied" }
-    elseif ($p.Enabled -ne $true) { F "$name profile is OFF" 'run harden.ps1 (firewall step)' }
-    else { W "$name profile inbound default is $($p.DefaultInboundAction), not Block" 'run harden.ps1 (firewall step)' }
+    $fwProfile = Get-NetFirewallProfile -Name $name
+    if ($fwProfile.Enabled -eq $true -and $fwProfile.DefaultInboundAction -eq 'Block') { P "$name profile: on, inbound denied" }
+    elseif ($fwProfile.Enabled -ne $true) { F "$name profile is OFF" 'run harden.ps1 (firewall step)' }
+    else { W "$name profile inbound default is $($fwProfile.DefaultInboundAction), not Block" 'run harden.ps1 (firewall step)' }
 }
 
 Write-Host '-- Logging and audit -----------------------------------------'
@@ -150,17 +158,25 @@ $consent = Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Sys
 if ($consent -in @(1, 2)) { P "Admins are prompted for elevation (ConsentPromptBehaviorAdmin=$consent)" }
 else { W "Admins elevate without a prompt (ConsentPromptBehaviorAdmin=$consent)" 'set it to 2 on interactive machines - deliberately not applied by this baseline (see README)' }
 
-$total = $Script:P + $Script:W + $Script:F
-$score = [math]::Round((($Script:P + 0.5 * $Script:W) / $total) * 100, 0)
+# The guard the old bug earned: a counter that is not an integer means
+# something clobbered it, and a score built on that would be fiction. Fail
+# loudly rather than print a broken line and exit 0.
+foreach ($c in @(@{n='PASS'; v=$Script:PassCount}, @{n='WARN'; v=$Script:WarnCount}, @{n='FAIL'; v=$Script:FailCount})) {
+    if ($c.v -isnot [int]) {
+        throw "the $($c.n) counter is a $($c.v.GetType().Name), not a number - a variable name collision clobbered it"
+    }
+}
+$total = $Script:PassCount + $Script:WarnCount + $Script:FailCount
+$score = [math]::Round((($Script:PassCount + 0.5 * $Script:WarnCount) / $total) * 100, 0)
 Write-Host ''
 Write-Host '=============================================================' -ForegroundColor White
-Write-Host " Score: $Script:P PASS, $Script:W WARN, $Script:F FAIL  ->  $score% compliant" -ForegroundColor White
-if ($Script:F -gt 0) {
+Write-Host " Score: $Script:PassCount PASS, $Script:WarnCount WARN, $Script:FailCount FAIL  ->  $score% compliant" -ForegroundColor White
+if ($Script:FailCount -gt 0) {
     Write-Host ' Verdict: core controls MISSING - fix the FAIL items first.' -ForegroundColor Red
     Write-Host '=============================================================' -ForegroundColor White
     exit 1
 }
-if ($Script:W -gt 0) {
+if ($Script:WarnCount -gt 0) {
     Write-Host ' Verdict: core baseline solid; WARN items are hardening still on the table.' -ForegroundColor Yellow
 } else {
     Write-Host ' Verdict: fully compliant with this checklist.' -ForegroundColor Green

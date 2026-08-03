@@ -90,13 +90,24 @@ The CI does what a reviewer would want to see done:
 `lint.yml` parses every script (the PowerShell equivalent of `bash -n`), runs
 PSScriptAnalyzer, and enforces **pure ASCII**.
 
-### Three gotchas this harness caught on its first day
+### Four gotchas this harness caught on its first day
 
 **A comment broke the parser.** This repo's very first CI run failed on a UTF-8
 em dash *inside a comment*: Windows PowerShell 5.1 reads a `.ps1` without a BOM
 as the system ANSI codepage, the character became mojibake and swallowed the
 closing quote. Every script is pure ASCII now and the lint job fails on any byte
 above 127, so it stays that way.
+
+**A one-letter variable ate the score.** `audit.ps1` counted results in
+`$Script:P` / `$Script:W` / `$Script:F` — and the firewall section's innocent
+`$fwProfile = Get-NetFirewallProfile` was originally `$p`. PowerShell variable
+names are **case-insensitive**, so `$p` *is* `$Script:P`: the PASS counter became
+a CIM object, every later PASS threw *"The '++' operator works only on numbers"*,
+and the final line printed `Score: MSFT_NetFirewallProfile (...) PASS, 4 WARN, 0
+FAIL -> % compliant`. **The job still went green**, because the audit only fails
+on `FAIL` — a green tick would have hidden it if nobody read the log. Fixed with
+spelled-out counter names, and a type guard that now throws if a counter is not
+an integer, so it can never fail quietly again.
 
 **`net.exe` asks questions.** A 16-character probe password made `net user`
 prompt *"Computers with Windows prior to Windows 2000 will not be able to use

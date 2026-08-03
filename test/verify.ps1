@@ -74,11 +74,13 @@ Test-RegEquals 'LM hashes are never stored' 'HKLM:\SYSTEM\CurrentControlSet\Cont
 
 Write-Host '== Firewall posture ==' -ForegroundColor White
 foreach ($name in @('Domain', 'Private', 'Public')) {
-    $p = Get-NetFirewallProfile -Name $name
-    if ($p.Enabled -eq $true -and $p.DefaultInboundAction -eq 'Block') {
+    # Not $p: see the counter-collision note in audit.ps1 - short variable
+    # names are how a CIM object ended up inside a counter.
+    $fwProfile = Get-NetFirewallProfile -Name $name
+    if ($fwProfile.Enabled -eq $true -and $fwProfile.DefaultInboundAction -eq 'Block') {
         Pass "$name profile enabled with inbound Block (effective)"
     } else {
-        Fail "$name profile - Enabled=$($p.Enabled), DefaultInboundAction=$($p.DefaultInboundAction)"
+        Fail "$name profile - Enabled=$($fwProfile.Enabled), DefaultInboundAction=$($fwProfile.DefaultInboundAction)"
     }
 }
 
