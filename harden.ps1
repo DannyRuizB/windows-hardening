@@ -353,7 +353,13 @@ function Invoke-Main {
     Set-PasswordPolicy
 
     Write-Host ''
-    Write-Host "Changes applied: $Script:ChangeCount" -ForegroundColor White
+    # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
+    # contract (the CI asserts "Changes applied: 0" on the second pass) and
+    # Write-Host does NOT go to the pipeline - it writes straight to the host,
+    # so a caller doing `$out = .\harden.ps1` would capture nothing. That
+    # exact mistake failed this repo's first e2e run while the script was
+    # perfectly idempotent: the cousin of "capture the real rc, not the pipe's".
+    Write-Output "Changes applied: $Script:ChangeCount"
     if ($Script:RebootNeeded.Count -gt 0) {
         Write-Warn2 'A reboot is needed before these take full effect:'
         foreach ($r in ($Script:RebootNeeded | Select-Object -Unique)) { Write-Host "      - $r" }

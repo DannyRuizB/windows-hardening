@@ -88,6 +88,22 @@ The CI does what a reviewer would want to see done:
 `lint.yml` parses every script (the PowerShell equivalent of `bash -n`), runs
 PSScriptAnalyzer, and enforces **pure ASCII**.
 
+### Two gotchas this harness caught on its first run
+
+**A comment broke the parser.** This repo's very first CI run failed on a UTF-8
+em dash *inside a comment*: Windows PowerShell 5.1 reads a `.ps1` without a BOM
+as the system ANSI codepage, the character became mojibake and swallowed the
+closing quote. Every script is pure ASCII now and the lint job fails on any byte
+above 127, so it stays that way.
+
+**`Write-Host` is not capturable.** The first e2e run failed its idempotence gate
+while the script was *perfectly* idempotent — every step reported "already" and
+the summary said `Changes applied: 0`. The bug was in the check: `Write-Host`
+writes straight to the host and never enters the pipeline, so `$out = .\harden.ps1`
+captured nothing and the regex matched nothing. The summary line now goes through
+`Write-Output` as the script's machine-readable contract. Same family as the Linux
+siblings' lesson about capturing the real exit code instead of the pipe's.
+
 ### Why ASCII-only is a rule here
 
 This repo's very first CI run failed on a **UTF-8 em dash inside a comment**.
