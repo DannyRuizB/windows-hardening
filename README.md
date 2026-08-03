@@ -141,8 +141,20 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 7 steps, a verify suite with two behavioural checks, a scored
-audit, and CI that hardens a real Windows box on every push. On the roadmap:
+Early but honest: 7 steps, 22 verify checks (three of them behavioural), a scored
+audit, and CI that hardens a real Windows box on every push.
+
+Current score on a freshly hardened CI runner:
+
+```
+ Score: 19 PASS, 4 WARN, 0 FAIL  ->  91% compliant
+```
+
+**91%, not 100%, on purpose.** The four warnings are the controls this baseline
+declines to apply on a machine it does not own: LSASS protected process, Defender
+real-time protection and PUA (off by design in the CI image), and the UAC consent
+prompt. Padding the score by applying them blindly would make the number prettier
+and the tool worse. On the roadmap:
 advanced audit policy (`auditpol` subcategories), AutoRun/AutoPlay, RDP posture
 (NLA + encryption level), Defender PUA, and a dedicated scenario script for the
 `-No*` switches.
