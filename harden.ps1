@@ -33,6 +33,10 @@
          never touches disk. Fileless is only invisible without this.
       7. Password and lockout policy: minimum length, history and a
          lockout threshold with an observation window.
+      8. RDP posture: require NLA (authenticate BEFORE a session exists),
+         force TLS for the transport and high encryption. Whether RDP is
+         reachable at all is a business decision this script does not make;
+         when it is, the session must be safe.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -60,6 +64,7 @@ param(
     [switch]$NoFirewall,
     [switch]$NoPowerShellLogging,
     [switch]$NoPasswordPolicy,
+    [switch]$NoRdp,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -321,6 +326,34 @@ function Set-PasswordPolicy {
     Write-Ok 'Local accounts need a real password, and brute force gets locked out'
 }
 
+# ---- Step 8: RDP posture ----------------------------------------------------
+
+function Set-RdpPosture {
+    if ($NoRdp) { Write-Skip 'Skipping RDP posture'; return }
+    Write-Step 'Hardening RDP: NLA required, TLS transport, high encryption'
+    # Whether RDP should be reachable at all is a business decision this
+    # baseline does not make - fDenyTSConnections is left alone. What it does
+    # decide: WHEN the port answers, the session must be safe. Three knobs:
+    #   UserAuthentication = 1 (NLA): the client authenticates BEFORE any
+    #     session or logon screen is created. Without it, anyone who can
+    #     reach 3389 talks to the pre-auth attack surface - the BlueKeep
+    #     class of bugs lived exactly there, and so does username-less
+    #     credential guessing against the logon UI.
+    #   SecurityLayer = 2: TLS required for the transport. 0 is legacy RDP
+    #     crypto and 1 means "negotiate", which is an invitation to settle
+    #     for whatever the client prefers.
+    #   MinEncryptionLevel = 3: High (128-bit both directions). Below it,
+    #     "client compatible" accepts what the client offers.
+    $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+    Set-RegistryValue -Path $rdp -Name 'UserAuthentication' -Value 1 `
+        -Because 'NLA: authenticate before a session exists' | Out-Null
+    Set-RegistryValue -Path $rdp -Name 'SecurityLayer' -Value 2 `
+        -Because 'TLS, never legacy RDP crypto' | Out-Null
+    Set-RegistryValue -Path $rdp -Name 'MinEncryptionLevel' -Value 3 `
+        -Because '128-bit in both directions' | Out-Null
+    Write-Ok 'If RDP answers, it demands NLA over TLS with high encryption'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -337,6 +370,7 @@ function Invoke-Main {
     if (-not $NoFirewall) { Write-Host '    - all firewall profiles on, inbound denied by default' }
     if (-not $NoPowerShellLogging) { Write-Host '    - PowerShell script-block and module logging' }
     if (-not $NoPasswordPolicy) { Write-Host '    - password length/history and account lockout' }
+    if (-not $NoRdp) { Write-Host '    - RDP posture: NLA + TLS + high encryption (never toggles RDP itself)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -351,6 +385,7 @@ function Invoke-Main {
     Set-FirewallPosture
     Enable-PowerShellLogging
     Set-PasswordPolicy
+    Set-RdpPosture
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
