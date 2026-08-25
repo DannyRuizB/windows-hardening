@@ -27,6 +27,11 @@ jobs:
           "SMB RequireSecuritySignature: $((Get-SmbServerConfiguration).RequireSecuritySignature)"
           Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction)" }
           (net accounts) | Select-String 'Minimum password length|history'
+          $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          "RDP fDenyTSConnections: $((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)"
+          foreach ($n in 'UserAuthentication','SecurityLayer','MinEncryptionLevel') {
+            "RDP ${n}: $((Get-ItemProperty $rdp -Name $n -ErrorAction SilentlyContinue).$n)"
+          }
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
       # LLMNR/NetBIOS enabled, no PowerShell logging, password length 0. Two
@@ -41,6 +46,16 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
             -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
           "planted NoLMHash=0 and WDigest UseLogonCredential=1"
+          # Measured: the Azure-built runner image ships RDP ACCEPTING
+          # connections (fDenyTSConnections=0) with all three knobs already at
+          # target (NLA=1, SecurityLayer=2, MinEncryptionLevel=3) - without
+          # planting, the RDP step would be 100% tautological. Plant all three
+          # weak; the posture step above logs what the image shipped.
+          $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          New-ItemProperty -Path $rdp -Name UserAuthentication -Value 0 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $rdp -Name SecurityLayer -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $rdp -Name MinEncryptionLevel -Value 2 -PropertyType DWord -Force | Out-Null
+          "planted RDP UserAuthentication=0, SecurityLayer=1, MinEncryptionLevel=2"
 
       - name: Dry run changes nothing
         shell: powershell

@@ -109,6 +109,28 @@ foreach ($attempt in 1..10) {
 if ($found) { Pass 'a fresh PowerShell session really lands in event 4104 (script-block logging is live)' }
 else { Fail 'script-block logging did not record a fresh session (marker not found in 4104)' }
 
+Write-Host '== RDP posture ==' -ForegroundColor White
+# The effective state as the Terminal Services WMI provider reports it - the
+# same class the System Properties Remote tab talks to - rather than the raw
+# keys the script wrote. sshd -T instead of sshd_config, continued. If the
+# provider is absent on this SKU, fall back to the registry and say so.
+$ts = Get-CimInstance -Namespace root/cimv2/TerminalServices -ClassName Win32_TSGeneralSetting `
+    -Filter "TerminalName='RDP-Tcp'" -ErrorAction SilentlyContinue
+if ($null -ne $ts) {
+    if ($ts.UserAuthenticationRequired -eq 1) { Pass 'RDP requires NLA (the TS provider reports it, not just the registry)' }
+    else { Fail "RDP does not require NLA - UserAuthenticationRequired=$($ts.UserAuthenticationRequired)" }
+    if ($ts.SecurityLayer -eq 2) { Pass 'RDP transport is TLS (SecurityLayer=2, effective)' }
+    else { Fail "RDP SecurityLayer is $($ts.SecurityLayer), not 2 (TLS)" }
+    if ($ts.MinEncryptionLevel -ge 3) { Pass "RDP encryption level is $($ts.MinEncryptionLevel) (High or FIPS)" }
+    else { Fail "RDP MinEncryptionLevel is $($ts.MinEncryptionLevel), below High (3)" }
+} else {
+    Write-Host '  (TS WMI provider not available - falling back to the registry)' -ForegroundColor DarkGray
+    $rdpKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+    Test-RegEquals 'RDP requires NLA' $rdpKey 'UserAuthentication' 1
+    Test-RegEquals 'RDP transport is TLS' $rdpKey 'SecurityLayer' 2
+    Test-RegEquals 'RDP encryption level is High' $rdpKey 'MinEncryptionLevel' 3
+}
+
 Write-Host '== Password and lockout policy ==' -ForegroundColor White
 # Effective values as an auditor reads them, not the values we wrote.
 $acct = (net accounts) | Out-String

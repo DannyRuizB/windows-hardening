@@ -147,6 +147,22 @@ try {
     else { W 'PUA protection is off' 'Set-MpPreference -PUAProtection 1 (roadmap)' }
 } catch { W 'Defender preferences unavailable' 'check whether Defender is present/managed on this host' }
 
+Write-Host '-- Remote access ---------------------------------------------'
+$rdpKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+$denyRdp = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' 'fDenyTSConnections'
+$nla = Get-Reg $rdpKey 'UserAuthentication'
+# One combined judgement on exposure: RDP off is the smallest surface; RDP on
+# is a legitimate choice on a server IF the client must authenticate before a
+# session exists. On WITHOUT NLA hands the pre-auth surface (the BlueKeep
+# class) to anyone who can reach 3389 - that is the serious one.
+if ($denyRdp -ne 0) { P 'RDP is not accepting connections (fDenyTSConnections)' }
+elseif ($nla -eq 1) { P 'RDP is on and requires NLA (no pre-auth surface)' }
+else { F 'RDP is ON without NLA - the logon screen answers before authentication' 'run harden.ps1 (RDP step)' }
+if ((Get-Reg $rdpKey 'SecurityLayer') -eq 2) { P 'RDP transport is TLS (SecurityLayer=2)' }
+else { W 'RDP transport can negotiate down to legacy RDP crypto' 'run harden.ps1 (RDP step)' }
+if ((Get-Reg $rdpKey 'MinEncryptionLevel') -ge 3) { P 'RDP encryption level is High or FIPS' }
+else { W 'RDP encryption level below High (128-bit)' 'run harden.ps1 (RDP step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

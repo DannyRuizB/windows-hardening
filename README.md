@@ -37,6 +37,7 @@ run reports **0**.
 | **Firewall posture** | All three profiles enabled with an **explicit inbound `Block`** and dropped-packet logging. Measured: the profiles were on but their default inbound action was `NotConfigured` — and "not configured" is not a policy, it means the answer comes from elsewhere and can change without anyone touching this machine. |
 | **PowerShell logging** | Script-block (event **4104**) and module logging. An attacker's PowerShell never has to touch disk: it arrives over the network and runs from memory, so file-based forensics find nothing. Script-block logging records the code **after** any decoding or de-obfuscation. Both keys were absent on the runner: no logging at all. |
 | **Password & lockout policy** | Minimum length 14, history 24, lockout after 5 attempts in a 15-minute window. Measured on the runner: **minimum length 0 and history 0** — a local account could have no password and reuse it forever. |
+| **RDP posture** | NLA required (`UserAuthentication = 1`), TLS transport (`SecurityLayer = 2`), high encryption (`MinEncryptionLevel = 3`). **Without NLA, anyone who can reach 3389 talks to the pre-auth attack surface** — the logon screen renders and the BlueKeep class of bugs lived exactly there; with it, the client authenticates *before* any session exists. Whether RDP should be reachable at all is a business decision the script never makes — `fDenyTSConnections` is left alone; the step makes the session safe *when* the port answers. |
 
 ### Deliberately *not* in the baseline
 
@@ -66,8 +67,9 @@ The CI does what a reviewer would want to see done:
 2. **Plants the offenders that would otherwise be tautological.** Most are
    natural (SMB signing off, LLMNR on, no logging, password length 0), but two
    knobs already held a good value, so the CI sets `NoLMHash = 0` and
-   `WDigest UseLogonCredential = 1` first. A check that passes without the step
-   doing anything proves nothing.
+   `WDigest UseLogonCredential = 1` first — and the Azure-built runner image
+   provisions RDP already configured, so the three RDP knobs are planted weak
+   too. A check that passes without the step doing anything proves nothing.
 3. **Dry run changes nothing** — asserted against the planted values.
 4. **First pass** hardens for real.
 5. **Second pass must report `Changes applied: 0`** — the idempotence contract,
@@ -90,7 +92,7 @@ The CI does what a reviewer would want to see done:
 `lint.yml` parses every script (the PowerShell equivalent of `bash -n`), runs
 PSScriptAnalyzer, and enforces **pure ASCII**.
 
-### Four gotchas this harness caught on its first day
+### Gotchas this harness caught on its first day
 
 **A comment broke the parser.** This repo's very first CI run failed on a UTF-8
 em dash *inside a comment*: Windows PowerShell 5.1 reads a `.ps1` without a BOM
@@ -141,23 +143,22 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 7 steps, 22 verify checks (three of them behavioural), a scored
+Early but honest: 8 steps, 23 verify checks (three of them behavioural), a scored
 audit, and CI that hardens a real Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 19 PASS, 4 WARN, 0 FAIL  ->  91% compliant
+ Score: 22 PASS, 4 WARN, 0 FAIL  ->  92% compliant
 ```
 
-**91%, not 100%, on purpose.** The four warnings are the controls this baseline
+**92%, not 100%, on purpose.** The four warnings are the controls this baseline
 declines to apply on a machine it does not own: LSASS protected process, Defender
 real-time protection and PUA (off by design in the CI image), and the UAC consent
 prompt. Padding the score by applying them blindly would make the number prettier
 and the tool worse. On the roadmap:
-advanced audit policy (`auditpol` subcategories), AutoRun/AutoPlay, RDP posture
-(NLA + encryption level), Defender PUA, and a dedicated scenario script for the
-`-No*` switches.
+advanced audit policy (`auditpol` subcategories), AutoRun/AutoPlay, Defender
+PUA, and a dedicated scenario script for the `-No*` switches.
 
 ## License
 
