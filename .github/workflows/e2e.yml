@@ -46,10 +46,11 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
             -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
           "planted NoLMHash=0 and WDigest UseLogonCredential=1"
-          # The runner is an Azure-built image and Azure provisions RDP already
-          # configured (NLA on), so the RDP step would confirm a default
-          # instead of doing work. Plant all three knobs weak; the posture
-          # step above logs what the image really shipped.
+          # Measured: the Azure-built runner image ships RDP ACCEPTING
+          # connections (fDenyTSConnections=0) with all three knobs already at
+          # target (NLA=1, SecurityLayer=2, MinEncryptionLevel=3) - without
+          # planting, the RDP step would be 100% tautological. Plant all three
+          # weak; the posture step above logs what the image shipped.
           $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
           New-ItemProperty -Path $rdp -Name UserAuthentication -Value 0 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $rdp -Name SecurityLayer -Value 1 -PropertyType DWord -Force | Out-Null
