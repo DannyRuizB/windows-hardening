@@ -167,10 +167,10 @@ audit, and CI that hardens a real Windows box on every push.
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 26 PASS, 4 WARN, 0 FAIL  ->  93% compliant
+ Score: 29 PASS, 4 WARN, 0 FAIL  ->  94% compliant
 ```
 
-**93%, not 100%, on purpose.** The four warnings are the controls this baseline
+**94%, not 100%, on purpose.** The four warnings are the controls this baseline
 declines to apply on a machine it does not own: LSASS protected process, Defender
 real-time protection and PUA (off by design in the CI image), and the UAC consent
 prompt. Padding the score by applying them blindly would make the number prettier
