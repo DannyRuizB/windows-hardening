@@ -132,6 +132,14 @@ belt alone has to hold.
 minimum we had just applied refuses. The check failed because the policy
 worked, so the refusal is now the first of three linked assertions.
 
+**The probe that must fail poisoned the exit code.** Step 9's behavioural check
+*needs* `net use` to fail — the failed logon **is** the check. But GitHub's
+`powershell` shell appends `exit $LASTEXITCODE` to every step, so the probe's
+non-zero rc outlived its own assertion: the run printed **"All checks passed"
+and exited 1**. Both test scripts now end with an explicit `exit 0` — the exit
+code is the script's verdict, never whatever the last native command left
+behind. Same family as the two lessons below.
+
 **`Write-Host` is not capturable.** The first e2e run failed its idempotence gate
 while the script was *perfectly* idempotent — every step reported "already" and
 the summary said `Changes applied: 0`. The bug was in the check: `Write-Host`

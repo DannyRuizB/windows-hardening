@@ -229,3 +229,6 @@ if ($Script:WarnCount -gt 0) {
     Write-Host ' Verdict: fully compliant with this checklist.' -ForegroundColor Green
 }
 Write-Host '=============================================================' -ForegroundColor White
+# Same contract as verify.ps1: the exit code is this script's verdict, never
+# whatever $LASTEXITCODE the last native command (net, auditpol) left behind.
+exit 0

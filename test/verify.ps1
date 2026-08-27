@@ -267,3 +267,10 @@ if ($Script:Failures -gt 0) {
     exit 1
 }
 Write-Host 'All checks passed' -ForegroundColor Green
+# Explicit, not optional: the failed-logon probe above leaves a NON-ZERO
+# $LASTEXITCODE behind by design (net use failing IS the check), and GitHub's
+# powershell shell appends `exit $LASTEXITCODE` to every step - so without
+# this line the step inherits the probe's rc and fails while printing
+# "All checks passed". The exit code is this script's verdict, not the last
+# native command's.
+exit 0
