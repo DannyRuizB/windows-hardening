@@ -6,7 +6,7 @@
 .DESCRIPTION
     Reads the EFFECTIVE state (what the cmdlets and the OS report) rather
     than the files the script wrote - asking sshd -T instead of trusting
-    sshd_config, in the Linux siblings' idiom. Two checks go further and
+    sshd_config, in the Linux siblings' idiom. Four checks go further and
     prove behaviour:
 
       * script-block logging: run a unique string through a FRESH PowerShell
@@ -17,6 +17,13 @@
         compliant password must be accepted, and changing that password to a
         7-character one must be refused again. A refusal only means something
         next to an acceptance.
+      * process auditing: spawn a process whose command line carries a unique
+        marker and find that marker in Security event 4688 - which only
+        happens when BOTH the subcategory and the command-line inclusion are
+        live.
+      * logon auditing: one deliberately failed network logon against this
+        very box (a unique nonexistent user, IPC$ on loopback) must land in
+        Security event 4625.
 
     Exit code 0 = every check passed.
 
@@ -187,6 +194,72 @@ try {
 } finally {
     $null = net user $probeUser /delete 2>&1
 }
+
+Write-Host '== Audit policy ==' -ForegroundColor White
+# auditpol's only locale-proof read is the backup CSV: /get prints the
+# setting as words and the words are localized, the backup carries a numeric
+# Setting Value column (0 none, 1 success, 2 failure, 3 both). See the note
+# on Get-AuditSettingValue in harden.ps1.
+$auditValues = @{}
+$auditCsv = Join-Path $env:TEMP ('wh-verify-auditpol-' + [guid]::NewGuid().ToString('N') + '.csv')
+try {
+    $null = auditpol /backup /file:"$auditCsv"
+    foreach ($line in Get-Content -LiteralPath $auditCsv) {
+        $cols = $line -split ','
+        if ($cols.Count -ge 7) { $auditValues[$cols[3].ToUpper()] = $cols[6] }
+    }
+} finally { Remove-Item -LiteralPath $auditCsv -ErrorAction SilentlyContinue }
+function Test-AuditBits {
+    param([string]$Label, [string]$Guid, [int]$Mask)
+    $v = if ($auditValues.ContainsKey($Guid)) { [int]$auditValues[$Guid] } else { -1 }
+    if ($v -ge 0 -and (($v -band $Mask) -eq $Mask)) { Pass "$Label (Setting Value $v)" }
+    else { Fail "$Label - Setting Value is $v, mask $Mask not satisfied" }
+}
+Test-AuditBits 'Logon auditing records success AND failure' '{0CCE9215-69AE-11D9-BED3-505054503030}' 3
+Test-AuditBits 'Process creation is audited' '{0CCE922B-69AE-11D9-BED3-505054503030}' 1
+Test-AuditBits 'Changes to the audit policy itself are audited' '{0CCE922F-69AE-11D9-BED3-505054503030}' 1
+Test-RegEquals 'event 4688 includes the command line' `
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' 'ProcessCreationIncludeCmdLine_Enabled' 1
+Test-RegEquals 'subcategory policy overrides the legacy categories' `
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'SCENoApplyLegacyAuditPolicy' 1
+
+# Behavioural, success side: an audit policy is only real if events land.
+# Spawn a process whose command line carries a unique marker, then find the
+# marker in Security event 4688. The marker sits in the ARGUMENTS, so the
+# match also proves ProcessCreationIncludeCmdLine_Enabled is in effect -
+# without it the event names cmd.exe and omits everything after it.
+$procMarker = 'WH-AUDIT-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+$null = & cmd.exe /c "rem $procMarker" 2>&1
+$procFound = $false
+foreach ($attempt in 1..10) {
+    Start-Sleep -Milliseconds 700
+    $evts = Get-WinEvent -FilterHashtable @{
+        LogName = 'Security'; Id = 4688
+        StartTime = (Get-Date).AddMinutes(-5)
+    } -MaxEvents 300 -ErrorAction SilentlyContinue
+    if ($evts | Where-Object { $_.Message -like "*$procMarker*" }) { $procFound = $true; break }
+}
+if ($procFound) { Pass 'a spawned process really lands in event 4688 WITH its command line (the marker was in the arguments)' }
+else { Fail 'process creation did not land in 4688 with the command line (marker not found)' }
+
+# Behavioural, failure side: one deliberately bad network logon against this
+# very box must land in event 4625. The username is unique so the search
+# cannot match a stale event; the target is IPC$ on loopback so nothing
+# leaves the host and nothing gets created. The user does not exist and the
+# password is wrong twice over - the attempt CANNOT succeed.
+$logonProbe = 'whNoSuch' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+$null = net use '\\127.0.0.1\IPC$' WrongPass123x /user:$logonProbe 2>&1
+$logonFound = $false
+foreach ($attempt in 1..10) {
+    Start-Sleep -Milliseconds 700
+    $evts = Get-WinEvent -FilterHashtable @{
+        LogName = 'Security'; Id = 4625
+        StartTime = (Get-Date).AddMinutes(-5)
+    } -MaxEvents 300 -ErrorAction SilentlyContinue
+    if ($evts | Where-Object { $_.Message -like "*$logonProbe*" }) { $logonFound = $true; break }
+}
+if ($logonFound) { Pass 'a failed logon really lands in event 4625 (the probe username was recorded)' }
+else { Fail 'the failed-logon probe did not land in event 4625' }
 
 Write-Host ''
 if ($Script:Failures -gt 0) {

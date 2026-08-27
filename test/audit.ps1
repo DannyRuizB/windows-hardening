@@ -43,6 +43,23 @@ function Get-Reg {
     try { (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
 }
 
+# Advanced audit policy, read the locale-proof way: auditpol /get prints the
+# setting as localized words, the backup CSV carries a numeric Setting Value
+# (0 none, 1 success, 2 failure, 3 both). See harden.ps1 step 9.
+$Script:AuditPolicyByGuid = @{}
+$apCsv = Join-Path $env:TEMP ('wh-audit-auditpol-' + [guid]::NewGuid().ToString('N') + '.csv')
+try {
+    $null = auditpol /backup /file:"$apCsv"
+    foreach ($line in Get-Content -LiteralPath $apCsv) {
+        $cols = $line -split ','
+        if ($cols.Count -ge 7) { $Script:AuditPolicyByGuid[$cols[3].ToUpper()] = $cols[6] }
+    }
+} finally { Remove-Item -LiteralPath $apCsv -ErrorAction SilentlyContinue }
+function Get-AuditValue {
+    param([string]$Guid)
+    if ($Script:AuditPolicyByGuid.ContainsKey($Guid)) { [int]$Script:AuditPolicyByGuid[$Guid] } else { -1 }
+}
+
 Write-Host ''
 Write-Host '=============================================================' -ForegroundColor White
 Write-Host ' COMPLIANCE AUDIT - Windows host vs a CIS-style checklist' -ForegroundColor White
@@ -106,11 +123,25 @@ if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLo
 if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging' 'EnableModuleLogging') -eq 1) {
     P 'PowerShell module logging is on'
 } else { W 'PowerShell module logging is off' 'run harden.ps1 (PowerShell logging step)' }
-# Wider than the baseline: advanced audit policy is the next step on the
-# roadmap, so it is graded but not yet applied.
-$logonAudit = (auditpol /get /subcategory:"Logon" 2>&1 | Out-String)
-if ($logonAudit -match 'Success and Failure') { P 'Logon auditing records success AND failure' }
-else { W 'Logon auditing does not record both success and failure' 'auditpol /set /subcategory:"Logon" /success:enable /failure:enable (roadmap)' }
+# Applied by harden.ps1 step 9 - graded through the backup CSV because it is
+# the only locale-proof interface auditpol has (the old version of this very
+# check matched the words 'Success and Failure' and would have judged a
+# Spanish server as failing forever).
+if (((Get-AuditValue '{0CCE9215-69AE-11D9-BED3-505054503030}') -band 3) -eq 3) {
+    P 'Logon auditing records success AND failure (4624/4625)'
+} else { F 'Logon auditing does not record both success and failure' 'run harden.ps1 (audit policy step)' }
+if (((Get-AuditValue '{0CCE922B-69AE-11D9-BED3-505054503030}') -band 1) -eq 1) {
+    P 'Process creation is audited (event 4688)'
+} else { F 'Process creation is not audited' 'run harden.ps1 (audit policy step)' }
+if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' 'ProcessCreationIncludeCmdLine_Enabled') -eq 1) {
+    P 'Event 4688 includes the full command line'
+} else { W '4688 names the process but not its arguments' 'run harden.ps1 (audit policy step)' }
+if (((Get-AuditValue '{0CCE922F-69AE-11D9-BED3-505054503030}') -band 1) -eq 1) {
+    P 'Changes to the audit policy itself are audited (event 4719)'
+} else { W 'Audit-policy changes go unrecorded' 'run harden.ps1 (audit policy step)' }
+if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'SCENoApplyLegacyAuditPolicy') -eq 1) {
+    P 'Subcategory audit policy overrides the legacy categories'
+} else { W 'Legacy category policy can silently override the subcategories' 'run harden.ps1 (audit policy step)' }
 
 Write-Host '-- Accounts --------------------------------------------------'
 $acct = (net accounts) | Out-String

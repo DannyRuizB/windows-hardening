@@ -37,6 +37,10 @@
          force TLS for the transport and high encryption. Whether RDP is
          reachable at all is a business decision this script does not make;
          when it is, the session must be safe.
+      9. Advanced audit policy: logons (success AND failure), process
+         creation with the full command line, and changes to the audit
+         policy itself. Steps 1-8 shrink the attack surface; this one makes
+         whatever still happens VISIBLE. Detection, not prevention.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -65,6 +69,7 @@ param(
     [switch]$NoPowerShellLogging,
     [switch]$NoPasswordPolicy,
     [switch]$NoRdp,
+    [switch]$NoAuditPolicy,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -354,6 +359,82 @@ function Set-RdpPosture {
     Write-Ok 'If RDP answers, it demands NLA over TLS with high encryption'
 }
 
+# ---- Step 9: advanced audit policy ------------------------------------------
+
+<#
+    auditpol has no locale-proof READ. Its /get output prints the setting as
+    WORDS, and the words are localized: "Success and Failure" on this runner
+    is "Aciertos y errores" on a Spanish box, so any script parsing them
+    breaks the moment it leaves en-US. The backup CSV is the one interface
+    that carries a NUMERIC Setting Value column instead (0 = no auditing,
+    1 = success, 2 = failure, 3 = both) - so that is what gets read.
+#>
+function Get-AuditSettingValue {
+    param([Parameter(Mandatory)][string]$Guid)
+    $csv = Join-Path $env:TEMP ('wh-auditpol-' + [guid]::NewGuid().ToString('N') + '.csv')
+    try {
+        $null = auditpol /backup /file:"$csv"
+        if ($LASTEXITCODE -ne 0) { throw "auditpol /backup failed (rc $LASTEXITCODE)" }
+        foreach ($line in Get-Content -LiteralPath $csv) {
+            $cols = $line -split ','
+            if ($cols.Count -ge 7 -and $cols[3] -eq $Guid) { return [int]$cols[6] }
+        }
+        throw "subcategory $Guid not found in the auditpol backup"
+    } finally {
+        Remove-Item -LiteralPath $csv -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-AuditPolicy {
+    if ($NoAuditPolicy) { Write-Skip 'Skipping audit policy'; return }
+    Write-Step 'Enabling the audit trail: logons, process creation, policy changes'
+    # Subcategories are addressed by GUID and never by name, for the same
+    # locale reason as the read side: auditpol localizes the NAMES too, so
+    # /subcategory:"Logon" works on an en-US box and fails on a Spanish one.
+    # The GUIDs are the same everywhere.
+    $subcats = @(
+        @{ Guid = '{0CCE9215-69AE-11D9-BED3-505054503030}'; Label = 'Logon'
+           Mask = 3; Flags = @('/success:enable', '/failure:enable')
+           Because = '4624/4625: who got in and who tried' }
+        @{ Guid = '{0CCE922B-69AE-11D9-BED3-505054503030}'; Label = 'Process Creation'
+           Mask = 1; Flags = @('/success:enable')
+           Because = '4688: every process that starts' }
+        @{ Guid = '{0CCE922F-69AE-11D9-BED3-505054503030}'; Label = 'Audit Policy Change'
+           Mask = 1; Flags = @('/success:enable')
+           Because = '4719: the log records who turns the log off' }
+    )
+    foreach ($sc in $subcats) {
+        $current = Get-AuditSettingValue -Guid $sc.Guid
+        # A bitmask test, not equality: a box already auditing MORE than the
+        # target (failure on top of success, say) is compliant, and knocking
+        # it down to the target would be the opposite of hardening.
+        if (($current -band $sc.Mask) -eq $sc.Mask) {
+            Write-Ok "$($sc.Label) auditing already on (Setting Value $current)"
+            continue
+        }
+        if ($DryRun) {
+            Write-Warn2 "(dry-run) would enable $($sc.Label) auditing (currently $current)"
+            continue
+        }
+        $null = auditpol /set /subcategory:"$($sc.Guid)" $sc.Flags
+        if ($LASTEXITCODE -ne 0) { throw "auditpol /set failed for $($sc.Label) (rc $LASTEXITCODE)" }
+        $Script:ChangeCount++
+        Write-Warn2 "$($sc.Label) auditing enabled, was $current ($($sc.Because))"
+    }
+    # A 4688 without the command line names the actor but not the act: the
+    # event says "powershell.exe started" and omits the -EncodedCommand that
+    # mattered. One registry value adds the arguments to the event.
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' `
+        -Name 'ProcessCreationIncludeCmdLine_Enabled' -Value 1 `
+        -Because 'event 4688 carries the full command line' | Out-Null
+    # Without this, the legacy 9-category policy silently overrides the
+    # subcategories above the moment a GPO or secedit template touches it.
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' `
+        -Name 'SCENoApplyLegacyAuditPolicy' -Value 1 `
+        -Because 'subcategory settings win over legacy categories' | Out-Null
+    Write-Ok 'Logons, new processes and audit-policy changes now leave a record'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -371,6 +452,7 @@ function Invoke-Main {
     if (-not $NoPowerShellLogging) { Write-Host '    - PowerShell script-block and module logging' }
     if (-not $NoPasswordPolicy) { Write-Host '    - password length/history and account lockout' }
     if (-not $NoRdp) { Write-Host '    - RDP posture: NLA + TLS + high encryption (never toggles RDP itself)' }
+    if (-not $NoAuditPolicy) { Write-Host '    - audit policy: logons, process creation (with command line), policy changes' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -386,6 +468,7 @@ function Invoke-Main {
     Enable-PowerShellLogging
     Set-PasswordPolicy
     Set-RdpPosture
+    Set-AuditPolicy
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
