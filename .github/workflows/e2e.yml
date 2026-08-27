@@ -61,9 +61,10 @@ jobs:
           New-ItemProperty -Path $rdp -Name SecurityLayer -Value 1 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $rdp -Name MinEncryptionLevel -Value 2 -PropertyType DWord -Force | Out-Null
           "planted RDP UserAuthentication=0, SecurityLayer=1, MinEncryptionLevel=2"
-          # Whatever the image ships for the three audit subcategories (the
-          # posture step above logs it), plant No Auditing so the audit-policy
-          # step has to do the work instead of confirming a default.
+          # Measured: the image ships Logon = Success and Failure (3) and
+          # Process Creation = Success (1) already - without planting, most of
+          # the audit-policy step would be tautological. Plant No Auditing on
+          # all three; the posture step above logs what the image shipped.
           foreach ($g in '{0CCE9215-69AE-11D9-BED3-505054503030}',
                          '{0CCE922B-69AE-11D9-BED3-505054503030}',
                          '{0CCE922F-69AE-11D9-BED3-505054503030}') {
