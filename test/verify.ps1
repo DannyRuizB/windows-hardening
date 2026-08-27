@@ -261,6 +261,15 @@ foreach ($attempt in 1..10) {
 if ($logonFound) { Pass 'a failed logon really lands in event 4625 (the probe username was recorded)' }
 else { Fail 'the failed-logon probe did not land in event 4625' }
 
+Write-Host '== AutoRun / AutoPlay ==' -ForegroundColor White
+# Machine policy values ARE the mechanism here (Explorer reads them at
+# insertion time), so the registry check is the effective check - the
+# WDigest/LLMNR precedent.
+$explorerPol = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+Test-RegEquals 'no drive type gets AutoRun (all eight bits set)' $explorerPol 'NoDriveTypeAutoRun' 255
+Test-RegEquals 'autorun.inf is never processed' $explorerPol 'NoAutorun' 1
+Test-RegEquals 'no autoplay for non-volume devices (MTP/cameras)' $explorerPol 'NoAutoplayfornonVolume' 1
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

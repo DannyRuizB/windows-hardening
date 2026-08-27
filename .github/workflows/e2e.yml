@@ -71,6 +71,13 @@ jobs:
             auditpol /set /subcategory:"$g" /success:disable /failure:disable | Out-Null
           }
           "planted the three audit subcategories to No Auditing"
+          # AutoRun: plant the CLASSIC weak default (0x91 leaves CD-ROM and
+          # removable bits clear) so the step provably tightens it to 0xFF -
+          # the value ships ABSENT on the image, and absent would already be
+          # real work, but a planted wrong value proves the overwrite too.
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' `
+            -Name NoDriveTypeAutoRun -Value 0x91 -PropertyType DWord -Force | Out-Null
+          "planted NoDriveTypeAutoRun=0x91"
 
       - name: Dry run changes nothing
         shell: powershell
@@ -86,6 +93,8 @@ jobs:
           $logonRow = (Get-Content $csv | Select-String '0cce9215' | Select-Object -First 1).Line
           Remove-Item $csv
           if (($logonRow -split ',')[-1] -ne '0') { throw "dry run changed the Logon audit subcategory: $logonRow" }
+          $ar = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' -Name NoDriveTypeAutoRun).NoDriveTypeAutoRun
+          if ($ar -ne 0x91) { throw "dry run changed NoDriveTypeAutoRun to $ar" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
