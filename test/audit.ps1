@@ -194,6 +194,17 @@ else { W 'RDP transport can negotiate down to legacy RDP crypto' 'run harden.ps1
 if ((Get-Reg $rdpKey 'MinEncryptionLevel') -ge 3) { P 'RDP encryption level is High or FIPS' }
 else { W 'RDP encryption level below High (128-bit)' 'run harden.ps1 (RDP step)' }
 
+Write-Host '-- Removable media / AutoRun ---------------------------------'
+if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'NoDriveTypeAutoRun') -eq 255) {
+    P 'AutoRun is off for every drive type (NoDriveTypeAutoRun 0xFF)'
+} else { W 'Some drive types still get AutoRun' 'run harden.ps1 (AutoRun step)' }
+if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'NoAutorun') -eq 1) {
+    P 'autorun.inf is never processed'
+} else { W 'autorun.inf may still be honored' 'run harden.ps1 (AutoRun step)' }
+if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'NoAutoplayfornonVolume') -eq 1) {
+    P 'Non-volume devices (MTP/cameras) get no autoplay'
+} else { W 'Non-volume devices may still autoplay' 'run harden.ps1 (AutoRun step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

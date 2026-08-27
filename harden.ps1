@@ -41,6 +41,11 @@
          creation with the full command line, and changes to the audit
          policy itself. Steps 1-8 shrink the attack surface; this one makes
          whatever still happens VISIBLE. Detection, not prevention.
+     10. AutoRun/AutoPlay off: no drive type gets to run code by being
+         plugged in or inserted. NoDriveTypeAutoRun 0xFF, autorun.inf never
+         processed, no autoplay for non-volume devices. The USB-stick
+         attack is older than most of this list and still works wherever
+         these three values are left at their defaults.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -70,6 +75,7 @@ param(
     [switch]$NoPasswordPolicy,
     [switch]$NoRdp,
     [switch]$NoAuditPolicy,
+    [switch]$NoAutoRun,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -435,6 +441,31 @@ function Set-AuditPolicy {
     Write-Ok 'Logons, new processes and audit-policy changes now leave a record'
 }
 
+# ---- Step 10: AutoRun / AutoPlay ---------------------------------------------
+
+function Disable-AutoRun {
+    if ($NoAutoRun) { Write-Skip 'Skipping AutoRun/AutoPlay hardening'; return }
+    Write-Step 'Disabling AutoRun and AutoPlay for every drive type'
+    # The oldest trick on this list and still alive: plug in a prepared USB
+    # stick (or mount an ISO/network share) and let the OS offer to run what
+    # is on it. Three machine-level policy values close the whole family:
+    #   NoDriveTypeAutoRun 0xFF: bit per drive type, all eight set - no
+    #     drive type (removable, fixed, network, CD, RAM disk, unknown)
+    #     gets autorun. The OS default leaves several bits clear.
+    #   NoAutorun 1: autorun.inf is never parsed at all - the file that
+    #     turned every shared USB stick of the Conficker era into a dropper.
+    #   NoAutoplayfornonVolume 1: no autoplay for non-volume devices (MTP
+    #     phones, cameras) - the modern edge the two classics miss.
+    $explorer = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+    Set-RegistryValue -Path $explorer -Name 'NoDriveTypeAutoRun' -Value 255 `
+        -Because 'no drive type runs code on insertion' | Out-Null
+    Set-RegistryValue -Path $explorer -Name 'NoAutorun' -Value 1 `
+        -Because 'autorun.inf is never processed' | Out-Null
+    Set-RegistryValue -Path $explorer -Name 'NoAutoplayfornonVolume' -Value 1 `
+        -Because 'no autoplay for MTP/camera-class devices' | Out-Null
+    Write-Ok 'Nothing runs just because it was plugged in'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -453,6 +484,7 @@ function Invoke-Main {
     if (-not $NoPasswordPolicy) { Write-Host '    - password length/history and account lockout' }
     if (-not $NoRdp) { Write-Host '    - RDP posture: NLA + TLS + high encryption (never toggles RDP itself)' }
     if (-not $NoAuditPolicy) { Write-Host '    - audit policy: logons, process creation (with command line), policy changes' }
+    if (-not $NoAutoRun) { Write-Host '    - AutoRun/AutoPlay off for every drive type (incl. autorun.inf and non-volume devices)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -469,6 +501,7 @@ function Invoke-Main {
     Set-PasswordPolicy
     Set-RdpPosture
     Set-AuditPolicy
+    Disable-AutoRun
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

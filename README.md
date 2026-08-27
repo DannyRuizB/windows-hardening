@@ -39,6 +39,7 @@ run reports **0**.
 | **Password & lockout policy** | Minimum length 14, history 24, lockout after 5 attempts in a 15-minute window. Measured on the runner: **minimum length 0 and history 0** — a local account could have no password and reuse it forever. |
 | **RDP posture** | NLA required (`UserAuthentication = 1`), TLS transport (`SecurityLayer = 2`), high encryption (`MinEncryptionLevel = 3`). **Without NLA, anyone who can reach 3389 talks to the pre-auth attack surface** — the logon screen renders and the BlueKeep class of bugs lived exactly there; with it, the client authenticates *before* any session exists. Whether RDP should be reachable at all is a business decision the script never makes — `fDenyTSConnections` is left alone; the step makes the session safe *when* the port answers. |
 | **Audit policy** | Logons (success **and** failure — events 4624/4625), process creation **with the full command line** (4688 plus `ProcessCreationIncludeCmdLine_Enabled`, because a 4688 without arguments names the actor but not the act), and changes to the audit policy itself (4719 — the log records who turns the log off). `SCENoApplyLegacyAuditPolicy = 1` so the subcategories can't be silently overridden by legacy category policy. Steps 1–8 shrink the attack surface; this one makes whatever still happens **visible**. Subcategories are addressed **by GUID, never by name** — `auditpol` localizes the names, so `/subcategory:"Logon"` breaks on a non-English box — and read back through the backup CSV, the only interface with a numeric, locale-proof `Setting Value` column. |
+| **AutoRun / AutoPlay** | The oldest trick on this list and still alive: a prepared USB stick, ISO or network share offering to run what's on it. Three machine-level policy values close the family: `NoDriveTypeAutoRun = 0xFF` (bit per drive type, **all eight set** — the OS default leaves several clear), `NoAutorun = 1` (autorun.inf is **never parsed** — the file that made the Conficker era), `NoAutoplayfornonVolume = 1` (no autoplay for MTP phones and cameras, the modern edge the two classics miss). The CI plants the classic weak `0x91` so the step provably tightens it, not just fills an absence. |
 
 ### Deliberately *not* in the baseline
 
@@ -70,7 +71,8 @@ The CI does what a reviewer would want to see done:
    knobs already held a good value, so the CI sets `NoLMHash = 0` and
    `WDigest UseLogonCredential = 1` first — and the Azure-built runner image
    provisions RDP already configured, so the three RDP knobs are planted weak
-   too, and the three audit subcategories are planted to *No Auditing*.
+   too, the three audit subcategories are planted to *No Auditing*, and
+   `NoDriveTypeAutoRun` is planted at the classic weak `0x91`.
    A check that passes without the step doing anything proves nothing.
 3. **Dry run changes nothing** — asserted against the planted values.
 4. **First pass** hardens for real.
@@ -159,7 +161,7 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 9 steps, 30 verify checks (six of them behavioural), a scored
+Early but honest: 10 steps, 33 verify checks (six of them behavioural), a scored
 audit, and CI that hardens a real Windows box on every push.
 
 Current score on a freshly hardened CI runner:
@@ -173,8 +175,7 @@ declines to apply on a machine it does not own: LSASS protected process, Defende
 real-time protection and PUA (off by design in the CI image), and the UAC consent
 prompt. Padding the score by applying them blindly would make the number prettier
 and the tool worse. On the roadmap:
-AutoRun/AutoPlay, Defender PUA, and a dedicated scenario script for the
-`-No*` switches.
+Defender PUA and a dedicated scenario script for the `-No*` switches.
 
 ## License
 
