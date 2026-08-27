@@ -32,6 +32,11 @@ jobs:
           foreach ($n in 'UserAuthentication','SecurityLayer','MinEncryptionLevel') {
             "RDP ${n}: $((Get-ItemProperty $rdp -Name $n -ErrorAction SilentlyContinue).$n)"
           }
+          "audit policy as shipped (last CSV column is Setting Value: 0=none 1=success 2=failure 3=both):"
+          $csv = "$env:TEMP\posture-audit.csv"
+          auditpol /backup /file:$csv | Out-Null
+          Get-Content $csv | Select-String '0cce9215|0cce922b|0cce922f'
+          Remove-Item $csv
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
       # LLMNR/NetBIOS enabled, no PowerShell logging, password length 0. Two
@@ -56,6 +61,16 @@ jobs:
           New-ItemProperty -Path $rdp -Name SecurityLayer -Value 1 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $rdp -Name MinEncryptionLevel -Value 2 -PropertyType DWord -Force | Out-Null
           "planted RDP UserAuthentication=0, SecurityLayer=1, MinEncryptionLevel=2"
+          # Measured: the image ships Logon = Success and Failure (3) and
+          # Process Creation = Success (1) already - without planting, most of
+          # the audit-policy step would be tautological. Plant No Auditing on
+          # all three; the posture step above logs what the image shipped.
+          foreach ($g in '{0CCE9215-69AE-11D9-BED3-505054503030}',
+                         '{0CCE922B-69AE-11D9-BED3-505054503030}',
+                         '{0CCE922F-69AE-11D9-BED3-505054503030}') {
+            auditpol /set /subcategory:"$g" /success:disable /failure:disable | Out-Null
+          }
+          "planted the three audit subcategories to No Auditing"
 
       - name: Dry run changes nothing
         shell: powershell
@@ -66,6 +81,11 @@ jobs:
           if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
           $wd = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential).UseLogonCredential
           if ($wd -ne 1) { throw "dry run changed WDigest to $wd" }
+          $csv = "$env:TEMP\dry-audit.csv"
+          auditpol /backup /file:$csv | Out-Null
+          $logonRow = (Get-Content $csv | Select-String '0cce9215' | Select-Object -First 1).Line
+          Remove-Item $csv
+          if (($logonRow -split ',')[-1] -ne '0') { throw "dry run changed the Logon audit subcategory: $logonRow" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

@@ -6,7 +6,7 @@
 A **baseline security hardening script for Windows Server / Windows 10-11**, in
 PowerShell — with a harness that proves it. CI takes a disposable Windows Server
 runner, **hardens it for real**, runs the script again to prove idempotence,
-verifies every promise (including two behavioural checks) and scores the box
+verifies every promise (including four behavioural proofs) and scores the box
 against a CIS-style checklist.
 
 Sibling of [debian-hardening](https://github.com/DannyRuizB/debian-hardening)
@@ -38,6 +38,7 @@ run reports **0**.
 | **PowerShell logging** | Script-block (event **4104**) and module logging. An attacker's PowerShell never has to touch disk: it arrives over the network and runs from memory, so file-based forensics find nothing. Script-block logging records the code **after** any decoding or de-obfuscation. Both keys were absent on the runner: no logging at all. |
 | **Password & lockout policy** | Minimum length 14, history 24, lockout after 5 attempts in a 15-minute window. Measured on the runner: **minimum length 0 and history 0** — a local account could have no password and reuse it forever. |
 | **RDP posture** | NLA required (`UserAuthentication = 1`), TLS transport (`SecurityLayer = 2`), high encryption (`MinEncryptionLevel = 3`). **Without NLA, anyone who can reach 3389 talks to the pre-auth attack surface** — the logon screen renders and the BlueKeep class of bugs lived exactly there; with it, the client authenticates *before* any session exists. Whether RDP should be reachable at all is a business decision the script never makes — `fDenyTSConnections` is left alone; the step makes the session safe *when* the port answers. |
+| **Audit policy** | Logons (success **and** failure — events 4624/4625), process creation **with the full command line** (4688 plus `ProcessCreationIncludeCmdLine_Enabled`, because a 4688 without arguments names the actor but not the act), and changes to the audit policy itself (4719 — the log records who turns the log off). `SCENoApplyLegacyAuditPolicy = 1` so the subcategories can't be silently overridden by legacy category policy. Steps 1–8 shrink the attack surface; this one makes whatever still happens **visible**. Subcategories are addressed **by GUID, never by name** — `auditpol` localizes the names, so `/subcategory:"Logon"` breaks on a non-English box — and read back through the backup CSV, the only interface with a numeric, locale-proof `Setting Value` column. |
 
 ### Deliberately *not* in the baseline
 
@@ -69,7 +70,8 @@ The CI does what a reviewer would want to see done:
    knobs already held a good value, so the CI sets `NoLMHash = 0` and
    `WDigest UseLogonCredential = 1` first — and the Azure-built runner image
    provisions RDP already configured, so the three RDP knobs are planted weak
-   too. A check that passes without the step doing anything proves nothing.
+   too, and the three audit subcategories are planted to *No Auditing*.
+   A check that passes without the step doing anything proves nothing.
 3. **Dry run changes nothing** — asserted against the planted values.
 4. **First pass** hardens for real.
 5. **Second pass must report `Changes applied: 0`** — the idempotence contract,
@@ -83,7 +85,13 @@ The CI does what a reviewer would want to see done:
      **no** password must be refused (the 14-character minimum bites), the
      same account **with** a compliant password must be accepted, and
      changing that password to a 7-character one must be refused again —
-     proving the policy is enforced at the point of use, not merely recorded.
+     proving the policy is enforced at the point of use, not merely recorded;
+   - a spawned process whose command line carries a unique marker must land
+     in Security event **4688** *with the marker in the arguments* — one
+     match proving both the subcategory and the command-line inclusion;
+   - one deliberately failed network logon (a unique nonexistent user
+     against `IPC$` on loopback — it *cannot* succeed and nothing leaves the
+     host) must land in event **4625**.
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -124,6 +132,14 @@ belt alone has to hold.
 minimum we had just applied refuses. The check failed because the policy
 worked, so the refusal is now the first of three linked assertions.
 
+**The probe that must fail poisoned the exit code.** Step 9's behavioural check
+*needs* `net use` to fail — the failed logon **is** the check. But GitHub's
+`powershell` shell appends `exit $LASTEXITCODE` to every step, so the probe's
+non-zero rc outlived its own assertion: the run printed **"All checks passed"
+and exited 1**. Both test scripts now end with an explicit `exit 0` — the exit
+code is the script's verdict, never whatever the last native command left
+behind. Same family as the two lessons below.
+
 **`Write-Host` is not capturable.** The first e2e run failed its idempotence gate
 while the script was *perfectly* idempotent — every step reported "already" and
 the summary said `Changes applied: 0`. The bug was in the check: `Write-Host`
@@ -143,22 +159,22 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 8 steps, 23 verify checks (three of them behavioural), a scored
+Early but honest: 9 steps, 30 verify checks (six of them behavioural), a scored
 audit, and CI that hardens a real Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 22 PASS, 4 WARN, 0 FAIL  ->  92% compliant
+ Score: 26 PASS, 4 WARN, 0 FAIL  ->  93% compliant
 ```
 
-**92%, not 100%, on purpose.** The four warnings are the controls this baseline
+**93%, not 100%, on purpose.** The four warnings are the controls this baseline
 declines to apply on a machine it does not own: LSASS protected process, Defender
 real-time protection and PUA (off by design in the CI image), and the UAC consent
 prompt. Padding the score by applying them blindly would make the number prettier
 and the tool worse. On the roadmap:
-advanced audit policy (`auditpol` subcategories), AutoRun/AutoPlay, Defender
-PUA, and a dedicated scenario script for the `-No*` switches.
+AutoRun/AutoPlay, Defender PUA, and a dedicated scenario script for the
+`-No*` switches.
 
 ## License
 
