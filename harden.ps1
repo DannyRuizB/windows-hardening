@@ -76,6 +76,7 @@ param(
     [switch]$NoRdp,
     [switch]$NoAuditPolicy,
     [switch]$NoAutoRun,
+    [switch]$NoServiceSurface,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -466,6 +467,45 @@ function Disable-AutoRun {
     Write-Ok 'Nothing runs just because it was plugged in'
 }
 
+# ---- Step 11: attack-surface services ----------------------------------------
+
+function Disable-AttackSurfaceServices {
+    if ($NoServiceSurface) { Write-Skip 'Skipping attack-surface services'; return }
+    Write-Step 'Stopping and disabling attack-surface services (Spooler, RemoteRegistry)'
+    # Two services whose job description IS the attack story:
+    #   Spooler: the Print Spooler runs as SYSTEM, accepts driver packages
+    #     from callers, and gave the world PrintNightmare (CVE-2021-34527) -
+    #     remote code execution as SYSTEM on any box with the service up. A
+    #     server that never prints runs it anyway, because it ships enabled.
+    #   RemoteRegistry: hands a remote caller this machine's registry -
+    #     reconnaissance as a service. A hardened baseline has WinRM and
+    #     PowerShell for administration; nothing needs this one.
+    # Stopped AND disabled, because either alone leaks: a stopped service
+    # with StartType Automatic comes back at the next boot, and a disabled
+    # one that is still running keeps serving until then.
+    foreach ($svcName in 'Spooler', 'RemoteRegistry') {
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if (-not $svc) {
+            Write-Skip "$svcName is not installed here - nothing to disable"
+            continue
+        }
+        if ($svc.Status -eq 'Stopped' -and $svc.StartType -eq 'Disabled') {
+            Write-Ok "$svcName already stopped and disabled"
+            continue
+        }
+        if ($DryRun) {
+            Write-Warn2 "(dry-run) would stop and disable $svcName (currently $($svc.Status)/$($svc.StartType))"
+            continue
+        }
+        $was = "$($svc.Status)/$($svc.StartType)"
+        if ($svc.Status -ne 'Stopped') { Stop-Service -Name $svcName -Force }
+        if ($svc.StartType -ne 'Disabled') { Set-Service -Name $svcName -StartupType Disabled }
+        $Script:ChangeCount++
+        Write-Warn2 "$svcName stopped and disabled, was $was"
+    }
+    Write-Ok 'Nobody exploits a service that is not running - and this one cannot even be started'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -485,6 +525,7 @@ function Invoke-Main {
     if (-not $NoRdp) { Write-Host '    - RDP posture: NLA + TLS + high encryption (never toggles RDP itself)' }
     if (-not $NoAuditPolicy) { Write-Host '    - audit policy: logons, process creation (with command line), policy changes' }
     if (-not $NoAutoRun) { Write-Host '    - AutoRun/AutoPlay off for every drive type (incl. autorun.inf and non-volume devices)' }
+    if (-not $NoServiceSurface) { Write-Host '    - attack-surface services stopped and disabled (Spooler, RemoteRegistry)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -502,6 +543,7 @@ function Invoke-Main {
     Set-RdpPosture
     Set-AuditPolicy
     Disable-AutoRun
+    Disable-AttackSurfaceServices
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
