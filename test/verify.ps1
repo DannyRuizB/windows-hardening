@@ -270,6 +270,36 @@ Test-RegEquals 'no drive type gets AutoRun (all eight bits set)' $explorerPol 'N
 Test-RegEquals 'autorun.inf is never processed' $explorerPol 'NoAutorun' 1
 Test-RegEquals 'no autoplay for non-volume devices (MTP/cameras)' $explorerPol 'NoAutoplayfornonVolume' 1
 
+Write-Host '== Attack-surface services ==' -ForegroundColor White
+# The CI plants both services RUNNING with StartType Automatic before the
+# harden, so these checks flip from red to green because of real work.
+foreach ($svcName in 'Spooler', 'RemoteRegistry') {
+    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    if (-not $svc) { Fail "$svcName exists on this box (the CI plants it running)"; continue }
+    if ($svc.Status -eq 'Stopped') { Pass "$svcName is stopped" }
+    else { Fail "$svcName should be stopped, is $($svc.Status)" }
+    if ($svc.StartType -eq 'Disabled') { Pass "$svcName is disabled (won't return at boot)" }
+    else { Fail "$svcName should be disabled, StartType is $($svc.StartType)" }
+}
+# Behavioural: disabled means it CANNOT be started - the lock, not the label.
+# Start-Service against a disabled service must throw; if it ever succeeds,
+# undo it so the box stays hardened, and fail loudly.
+$spoolerStarted = $false
+try { Start-Service -Name Spooler -ErrorAction Stop; $spoolerStarted = $true } catch { }
+if ($spoolerStarted) {
+    Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue
+    Set-Service -Name Spooler -StartupType Disabled -ErrorAction SilentlyContinue
+    Fail 'a disabled Spooler must refuse to start (Start-Service succeeded)'
+} else {
+    Pass 'a disabled Spooler refuses to start (the disable is a lock, not a label)'
+}
+# And the process is really gone: no spoolsv.exe parsing anything as SYSTEM.
+if (Get-Process -Name spoolsv -ErrorAction SilentlyContinue) {
+    Fail 'no spoolsv.exe process is running'
+} else {
+    Pass 'no spoolsv.exe process is running (nothing to exploit)'
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

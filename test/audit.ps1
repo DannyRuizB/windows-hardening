@@ -205,6 +205,24 @@ if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
     P 'Non-volume devices (MTP/cameras) get no autoplay'
 } else { W 'Non-volume devices may still autoplay' 'run harden.ps1 (AutoRun step)' }
 
+Write-Host '-- Attack-surface services ------------------------------------'
+# Graded WARN, not FAIL, because both have a legitimate niche (a real print
+# server; a legacy monitoring tool) - but on a baseline they are pure attack
+# surface: Spooler is the PrintNightmare class running as SYSTEM, and
+# RemoteRegistry is reconnaissance as a service.
+$spooler = Get-Service -Name Spooler -ErrorAction SilentlyContinue
+if (-not $spooler -or ($spooler.Status -eq 'Stopped' -and $spooler.StartType -eq 'Disabled')) {
+    P 'Print Spooler is stopped and disabled (PrintNightmare class off)'
+} else {
+    W "Print Spooler is $($spooler.Status)/$($spooler.StartType)" 'stop and disable it unless this box actually prints (harden.ps1 service step)'
+}
+$remoteReg = Get-Service -Name RemoteRegistry -ErrorAction SilentlyContinue
+if (-not $remoteReg -or ($remoteReg.Status -eq 'Stopped' -and $remoteReg.StartType -eq 'Disabled')) {
+    P 'RemoteRegistry is stopped and disabled (no registry reads over the wire)'
+} else {
+    W "RemoteRegistry is $($remoteReg.Status)/$($remoteReg.StartType)" 'stop and disable it (harden.ps1 service step)'
+}
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
