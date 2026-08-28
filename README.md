@@ -163,7 +163,8 @@ and which candidates were dropped as unprovable here.
 ## Status
 
 Early but honest: 11 steps, 39 verify checks (eight of them behavioural), a scored
-audit, and CI that hardens a real Windows box on every push.
+audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
+Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
@@ -175,8 +176,13 @@ Current score on a freshly hardened CI runner:
 declines to apply on a machine it does not own: LSASS protected process, Defender
 real-time protection and PUA (off by design in the CI image), and the UAC consent
 prompt. Padding the score by applying them blindly would make the number prettier
-and the tool worse. On the roadmap:
-Defender PUA and a dedicated scenario script for the `-No*` switches.
+and the tool worse. On the roadmap: Defender PUA.
+
+`test/scenarios.ps1` closes what used to be here: every `-No<Step>` switch is
+proven twice — the skipped step leaves its knob exactly as planted, the rest of
+the baseline still applies — and one closing full run repairs every planted
+offender, so each step's reconcile-over-real-drift is exercised and the box
+leaves as hardened as it arrived.
 
 ## License
 

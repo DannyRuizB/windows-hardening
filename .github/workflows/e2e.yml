@@ -134,33 +134,10 @@ jobs:
         shell: powershell
         run: .\test\audit.ps1
 
-      # Skipping a step must leave its knob exactly as planted while the rest
-      # of the baseline still applies - the scenario tests of the Bash sibling,
-      # in miniature until they get their own script.
-      - name: Flag behaviour (-NoWDigest keeps the planted offender)
+      # Every -No<Step> switch, one per step: the skipped step leaves its knob
+      # as planted, the rest of the baseline still applies, and a closing full
+      # run repairs every plant (so the box also leaves as hardened as it
+      # arrived). Replaces the two hand-rolled flag-behaviour checks.
+      - name: Scenario tests (every -No* switch)
         shell: powershell
-        run: |
-          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
-            -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
-          .\harden.ps1 -NoWDigest -Yes | Out-Null
-          $wd = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential).UseLogonCredential
-          if ($wd -ne 1) { throw "-NoWDigest should have left UseLogonCredential=1, found $wd" }
-          $smb = (Get-SmbServerConfiguration).RequireSecuritySignature
-          if (-not $smb) { throw "the rest of the baseline should still apply, SMB signing is $smb" }
-          "-NoWDigest skipped its step and the rest still applied"
-
-      - name: Flag behaviour (-NoServiceSurface keeps the planted services alive)
-        shell: powershell
-        run: |
-          foreach ($n in 'Spooler', 'RemoteRegistry') {
-            Set-Service -Name $n -StartupType Automatic
-            Start-Service -Name $n
-          }
-          .\harden.ps1 -NoServiceSurface -Yes | Out-Null
-          foreach ($n in 'Spooler', 'RemoteRegistry') {
-            $svc = Get-Service -Name $n
-            if ($svc.Status -ne 'Running' -or $svc.StartType -ne 'Automatic') {
-              throw "-NoServiceSurface should have left $n running/Automatic, found $($svc.Status)/$($svc.StartType)"
-            }
-          }
-          "-NoServiceSurface skipped its step and both services survived"
+        run: .\test\scenarios.ps1
