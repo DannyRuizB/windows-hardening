@@ -170,7 +170,7 @@ Windows box on every push.
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 31 PASS, 4 WARN, 0 FAIL  ->  94% compliant
+ Score: 36 PASS, 4 WARN, 0 FAIL  ->  95% compliant
 ```
 
 **94%, not 100%, on purpose.** The four warnings are the controls this baseline
