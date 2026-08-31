@@ -107,6 +107,10 @@ $scenarios = @(
        Plant  = { foreach ($n in 'Spooler', 'RemoteRegistry') { Set-Service -Name $n -StartupType Automatic; Start-Service -Name $n } }
        Probe  = { (Get-Service Spooler).Status -eq 'Running' -and (Get-Service RemoteRegistry).Status -eq 'Running' }
        Desc   = 'both planted services stay running' }
+    @{ Switch = 'NoNullSessions'
+       Plant  = { New-ItemProperty -Path $lsa -Name RestrictAnonymous -Value 0 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue $lsa RestrictAnonymous) -eq 0 }
+       Desc   = 'anonymous enumeration survives' }
 )
 
 Write-Host ''

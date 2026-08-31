@@ -223,6 +223,23 @@ if (-not $remoteReg -or ($remoteReg.Status -eq 'Stopped' -and $remoteReg.StartTy
     W "RemoteRegistry is $($remoteReg.Status)/$($remoteReg.StartType)" 'stop and disable it (harden.ps1 service step)'
 }
 
+Write-Host '-- Null sessions (anonymous enumeration) -----------------------'
+# The anonymous SMB logon hands over the map (users, shares, password
+# policy) before any credential is touched - enum4linux's opening move.
+$lsaKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$srvKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+if ((Get-Reg $lsaKey 'RestrictAnonymousSAM') -eq 1) { P 'Anonymous SAM account enumeration is refused' }
+else { F 'Anonymous callers can enumerate SAM accounts (the password-spray shopping list)' 'set Lsa\RestrictAnonymousSAM=1 (harden.ps1 null-session step)' }
+if ((Get-Reg $lsaKey 'RestrictAnonymous') -eq 1) { P 'Anonymous share enumeration is refused' }
+else { W 'Anonymous callers can enumerate shares' 'set Lsa\RestrictAnonymous=1 (harden.ps1 null-session step)' }
+if ((Get-Reg $lsaKey 'EveryoneIncludesAnonymous') -ne 1) { P 'The anonymous token does not carry Everyone' }
+else { F 'Anonymous callers are treated as Everyone - every Everyone ACL covers them' 'set Lsa\EveryoneIncludesAnonymous=0 (harden.ps1 null-session step)' }
+if ((Get-Reg $srvKey 'RestrictNullSessAccess') -eq 1) { P 'Null sessions reach only listed exceptions' }
+else { W 'Null sessions are not restricted to the exception lists' 'set LanmanServer RestrictNullSessAccess=1 (harden.ps1 null-session step)' }
+$nullPipes = @((Get-Reg $srvKey 'NullSessionPipes') | Where-Object { $_ })
+if ($nullPipes.Count -eq 0) { P 'No null-session pipe exceptions' }
+else { W "Null-session pipes still listed: $($nullPipes -join ', ')" 'empty NullSessionPipes unless a legacy service truly needs it (harden.ps1 null-session step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

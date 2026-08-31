@@ -300,6 +300,30 @@ if (Get-Process -Name spoolsv -ErrorAction SilentlyContinue) {
     Pass 'no spoolsv.exe process is running (nothing to exploit)'
 }
 
+Write-Host '== Null sessions (anonymous enumeration) ==' -ForegroundColor White
+# The CI plants the whole family weak (RestrictAnonymous 0, Everyone includes
+# Anonymous, legacy null pipes), so these flip red-to-green from real work.
+$lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$srvPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+Test-RegEquals 'anonymous callers cannot enumerate SAM accounts' $lsaPath 'RestrictAnonymousSAM' 1
+Test-RegEquals 'anonymous callers cannot enumerate shares' $lsaPath 'RestrictAnonymous' 1
+Test-RegEquals 'the anonymous token does not carry Everyone' $lsaPath 'EveryoneIncludesAnonymous' 0
+Test-RegEquals 'null sessions reach only listed exceptions' $srvPath 'RestrictNullSessAccess' 1
+# The exception lists must be PRESENT and EMPTY: absent is a default, not a
+# decision, and one legacy pipe left behind is how a restricted box answers.
+foreach ($listName in 'NullSessionPipes', 'NullSessionShares') {
+    $present = $false
+    $entries = @()
+    try {
+        $raw = (Get-ItemProperty -LiteralPath $srvPath -Name $listName -ErrorAction Stop).$listName
+        $present = $true
+        $entries = @($raw | Where-Object { $_ })
+    } catch { $present = $false }
+    if ($present -and $entries.Count -eq 0) { Pass "$listName is pinned to the empty list" }
+    elseif (-not $present) { Fail "$listName should be pinned empty, is absent" }
+    else { Fail "$listName still lists exceptions: $($entries -join ', ')" }
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

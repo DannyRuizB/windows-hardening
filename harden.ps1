@@ -46,6 +46,14 @@
          processed, no autoplay for non-volume devices. The USB-stick
          attack is older than most of this list and still works wherever
          these three values are left at their defaults.
+     11. Attack-surface services: Print Spooler (the PrintNightmare class,
+         running as SYSTEM) and RemoteRegistry (reconnaissance as a
+         service) stopped AND disabled - either alone leaks.
+     12. Null sessions: the anonymous SMB logon that hands over the map
+         before any credential is touched - user list, share list,
+         password policy. RestrictAnonymous family pinned, the anonymous
+         token stripped of Everyone, and the server's null-session
+         exception lists (pipes/shares) emptied.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -77,6 +85,7 @@ param(
     [switch]$NoAuditPolicy,
     [switch]$NoAutoRun,
     [switch]$NoServiceSurface,
+    [switch]$NoNullSessions,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -506,6 +515,70 @@ function Disable-AttackSurfaceServices {
     Write-Ok 'Nobody exploits a service that is not running - and this one cannot even be started'
 }
 
+# ---- Step 12: null sessions (anonymous enumeration) --------------------------
+
+function Disable-NullSessions {
+    if ($NoNullSessions) { Write-Skip 'Skipping null-session lockdown'; return }
+    Write-Step 'Locking down null sessions (anonymous enumeration)'
+    # A null session is an SMB logon with an EMPTY username and password -
+    # NT-era plumbing that attack tooling still tries first, because where it
+    # answers it hands over the whole map before any credential is touched:
+    # the user list, the share list, the password policy. enum4linux's
+    # opening move, and the reason RID cycling exists. Four values, because
+    # each one guards a DIFFERENT door:
+    #   RestrictAnonymousSAM = 1: anonymous callers cannot enumerate SAM
+    #     accounts (the user list - the input every password spray needs).
+    #   RestrictAnonymous = 1: anonymous callers cannot enumerate shares
+    #     either. NOT 2: that NT-era value breaks trust and cluster
+    #     scenarios, which is why every guide since has said 1.
+    #   EveryoneIncludesAnonymous = 0: the anonymous token does not carry
+    #     the Everyone group - every ACL granting Everyone stops covering
+    #     the caller with no name.
+    #   RestrictNullSessAccess = 1 (server side): a null session reaches
+    #     only the pipes and shares EXPLICITLY listed as exceptions...
+    # ...and the exception lists themselves are emptied, because
+    # NullSessionPipes shipping legacy entries (browser, netlogon) is
+    # exactly how a "restricted" box still answers anonymous callers.
+    $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+    $srv = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+    Set-RegistryValue -Path $lsa -Name 'RestrictAnonymousSAM' -Value 1 `
+        -Because 'no anonymous SAM account enumeration' | Out-Null
+    Set-RegistryValue -Path $lsa -Name 'RestrictAnonymous' -Value 1 `
+        -Because 'no anonymous share enumeration' | Out-Null
+    Set-RegistryValue -Path $lsa -Name 'EveryoneIncludesAnonymous' -Value 0 `
+        -Because 'anonymous is nobody, not Everyone' | Out-Null
+    Set-RegistryValue -Path $srv -Name 'RestrictNullSessAccess' -Value 1 `
+        -Because 'null sessions reach only listed exceptions' | Out-Null
+    # The exception lists are MultiString and Set-RegistryValue compares
+    # scalars, so they are handled here: present-and-empty is the goal state,
+    # anything else (legacy entries, or the value absent) gets pinned to the
+    # empty list - absent only means "this build's default", and a default is
+    # not a decision (the WDigest argument, applied to a list).
+    foreach ($listName in 'NullSessionPipes', 'NullSessionShares') {
+        $present = $false
+        $entries = @()
+        try {
+            $raw = (Get-ItemProperty -LiteralPath $srv -Name $listName -ErrorAction Stop).$listName
+            $present = $true
+            $entries = @($raw | Where-Object { $_ })
+        } catch { $present = $false }
+        if ($present -and $entries.Count -eq 0) {
+            Write-Ok "$listName already empty"
+            continue
+        }
+        $was = if (-not $present) { '<absent>' } else { $entries -join ', ' }
+        if ($DryRun) {
+            Write-Warn2 "(dry-run) would empty $listName (currently $was)"
+            continue
+        }
+        New-ItemProperty -LiteralPath $srv -Name $listName -Value ([string[]]@()) `
+            -PropertyType MultiString -Force | Out-Null
+        $Script:ChangeCount++
+        Write-Warn2 "$listName pinned to the empty list, was $was"
+    }
+    Write-Ok 'The machine no longer answers questions from a caller with no name'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -526,6 +599,7 @@ function Invoke-Main {
     if (-not $NoAuditPolicy) { Write-Host '    - audit policy: logons, process creation (with command line), policy changes' }
     if (-not $NoAutoRun) { Write-Host '    - AutoRun/AutoPlay off for every drive type (incl. autorun.inf and non-volume devices)' }
     if (-not $NoServiceSurface) { Write-Host '    - attack-surface services stopped and disabled (Spooler, RemoteRegistry)' }
+    if (-not $NoNullSessions) { Write-Host '    - null sessions locked down (no anonymous enumeration, exception lists emptied)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -544,6 +618,7 @@ function Invoke-Main {
     Set-AuditPolicy
     Disable-AutoRun
     Disable-AttackSurfaceServices
+    Disable-NullSessions
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
