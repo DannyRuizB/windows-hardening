@@ -90,6 +90,19 @@ jobs:
           }
           Get-Service Spooler, RemoteRegistry |
             ForEach-Object { "planted $($_.Name): $($_.Status)/$($_.StartType)" }
+          # Null sessions: a modern image ships RestrictAnonymousSAM=1 and the
+          # rest absent - absence is a default, not a planted weakness, so the
+          # step would be half tautological. Plant the WHOLE family weak
+          # (including two legacy null-session pipes) so step 12 provably
+          # shuts every door instead of confirming an image default.
+          $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+          $srv = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+          New-ItemProperty -Path $lsa -Name RestrictAnonymousSAM -Value 0 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $lsa -Name RestrictAnonymous -Value 0 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $lsa -Name EveryoneIncludesAnonymous -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $srv -Name RestrictNullSessAccess -Value 0 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $srv -Name NullSessionPipes -Value @('browser', 'srvsvc') -PropertyType MultiString -Force | Out-Null
+          "planted the null-session family weak (RestrictAnonymous* 0, Everyone includes Anonymous, browser+srvsvc null pipes)"
 
       - name: Dry run changes nothing
         shell: powershell
@@ -108,6 +121,8 @@ jobs:
           $ar = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' -Name NoDriveTypeAutoRun).NoDriveTypeAutoRun
           if ($ar -ne 0x91) { throw "dry run changed NoDriveTypeAutoRun to $ar" }
           if ((Get-Service Spooler).Status -ne 'Running') { throw "dry run stopped the Spooler" }
+          $ra = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictAnonymous).RestrictAnonymous
+          if ($ra -ne 0) { throw "dry run changed RestrictAnonymous to $ra" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
