@@ -38,6 +38,7 @@ jobs:
           Get-Content $csv | Select-String '0cce9215|0cce922b|0cce922f'
           Remove-Item $csv
           "Defender PUAProtection as shipped (0=off 1=block 2=audit): $((Get-MpPreference).PUAProtection)"
+          "SMB1 as shipped: server EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol) mrxsmb10=$(if (Get-Service mrxsmb10 -ErrorAction SilentlyContinue) { (Get-Service mrxsmb10).StartType } else { 'absent' }) feature=$((Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State)"
           Get-Service Spooler, RemoteRegistry -ErrorAction SilentlyContinue |
             ForEach-Object { "service $($_.Name): $($_.Status)/$($_.StartType)" }
 
@@ -104,6 +105,12 @@ jobs:
           New-ItemProperty -Path $srv -Name RestrictNullSessAccess -Value 0 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $srv -Name NullSessionPipes -Value @('browser', 'srvsvc') -PropertyType MultiString -Force | Out-Null
           "planted the null-session family weak (RestrictAnonymous* 0, Everyone includes Anonymous, browser+srvsvc null pipes)"
+          # SMB1: a modern image ships the server dialect OFF (and the driver
+          # and feature absent) - absence is a default, not a planted weakness.
+          # Plant the server flag on so step 14 provably shuts the door; the
+          # other two doors are asserted as absent by verify.
+          Set-SmbServerConfiguration -EnableSMB1Protocol $true -Confirm:$false -Force
+          "planted SMB1 server dialect: EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol)"
 
       - name: Dry run changes nothing
         shell: powershell
@@ -127,6 +134,7 @@ jobs:
           if ($ra -ne 0) { throw "dry run changed RestrictAnonymous to $ra" }
           $puaAfter = [int](Get-MpPreference).PUAProtection
           if ($puaAfter -ne $puaBefore) { throw "dry run changed Defender PUAProtection: $puaBefore -> $puaAfter" }
+          if (-not (Get-SmbServerConfiguration).EnableSMB1Protocol) { throw "dry run disabled the planted SMB1 dialect" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

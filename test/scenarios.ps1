@@ -117,6 +117,10 @@ $scenarios = @(
        Plant  = { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' -Name MpEnablePus -ErrorAction SilentlyContinue; Set-MpPreference -PUAProtection 0 }
        Probe  = { [int](Get-MpPreference).PUAProtection -eq 0 }
        Desc   = 'PUA protection stays off' }
+    @{ Switch = 'NoSmb1'
+       Plant  = { Set-SmbServerConfiguration -EnableSMB1Protocol $true -Confirm:$false -Force }
+       Probe  = { (Get-SmbServerConfiguration).EnableSMB1Protocol }
+       Desc   = 'the SMB1 server dialect stays enabled' }
 )
 
 Write-Host ''

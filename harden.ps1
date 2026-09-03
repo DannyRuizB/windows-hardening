@@ -61,6 +61,12 @@
          Server. Pinned as machine policy (MpEnablePus=1, what Group
          Policy writes - survives a preference reset) AND applied live via
          Set-MpPreference, so the effective value flips now.
+     14. SMBv1 off: the 1980s dialect behind EternalBlue / WannaCry /
+         NotPetya - no real signing, no encryption, a parser the world
+         spent 2017 patching. Three doors: the server dialect
+         (EnableSMB1Protocol), the client redirector (the mrxsmb10
+         driver) and the optional feature itself, each skipped (not
+         failed) when Windows says it is not there.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -94,6 +100,7 @@ param(
     [switch]$NoServiceSurface,
     [switch]$NoNullSessions,
     [switch]$NoDefenderPua,
+    [switch]$NoSmb1,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -631,6 +638,64 @@ function Enable-DefenderPua {
     Write-Ok 'Adware, bundlers and miners are blocked, not just noticed'
 }
 
+# ---- Step 14: SMBv1 off -----------------------------------------------------
+
+function Disable-Smb1 {
+    if ($NoSmb1) { Write-Skip 'Skipping SMBv1 removal'; return }
+    Write-Step 'Turning SMBv1 off (server dialect, client driver, optional feature)'
+    # SMBv1 is the 1980s dialect behind EternalBlue, WannaCry and NotPetya:
+    # no signing worth the name, no encryption, and a parser the world spent
+    # 2017 patching. Nothing built this decade needs it; the clients that do
+    # are the ones that should not be on the network. Three doors:
+    #   - the SERVER dialect: EnableSMB1Protocol, read back through
+    #     Get-SmbServerConfiguration - the effective config, the "sshd -T"
+    #     of SMB (a modern image ships it off; the CI plants it on so this
+    #     step provably shuts a door instead of confirming a default);
+    #   - the CLIENT redirector: the mrxsmb10 driver, so this box never
+    #     speaks SMB1 outbound either (a downgrade attack needs a willing
+    #     client). LanmanWorkstation lists it as a dependency, so that list
+    #     is rewritten to the SMB2 driver alone - Microsoft's own procedure;
+    #   - the optional FEATURE (SMB1Protocol), removed so neither can come
+    #     back - a reboot may be needed to finish that removal.
+    # Each door is skipped, not failed, when Windows says it is not there.
+    $cfg = Get-SmbServerConfiguration
+    if (-not $cfg.EnableSMB1Protocol) {
+        Write-Ok 'SMB server already refuses the SMB1 dialect'
+    } elseif ($DryRun) {
+        Write-Warn2 '(dry-run) would disable the SMB1 dialect on the server (currently enabled)'
+    } else {
+        Set-SmbServerConfiguration -EnableSMB1Protocol $false -Confirm:$false -Force
+        $Script:ChangeCount++
+        Write-Warn2 'SMB server no longer speaks SMB1, was enabled'
+    }
+    $client = Get-Service -Name mrxsmb10 -ErrorAction SilentlyContinue
+    if ($null -eq $client) {
+        Write-Ok 'SMB1 client driver (mrxsmb10) is not present'
+    } elseif ($client.StartType -eq 'Disabled') {
+        Write-Ok 'SMB1 client driver (mrxsmb10) already disabled'
+    } elseif ($DryRun) {
+        Write-Warn2 "(dry-run) would disable the SMB1 client driver mrxsmb10 (currently $($client.StartType))"
+    } else {
+        Set-Service -Name mrxsmb10 -StartupType Disabled
+        & sc.exe config lanmanworkstation depend= bowser/mrxsmb20/nsi | Out-Null
+        $Script:ChangeCount++
+        $Script:RebootNeeded += 'SMB1 client driver (mrxsmb10) disabled'
+        Write-Warn2 "SMB1 client driver mrxsmb10 disabled, was $($client.StartType)"
+    }
+    $feature = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue
+    if ($null -eq $feature -or "$($feature.State)" -like 'Disabled*') {
+        Write-Ok "SMB1Protocol optional feature is not installed ($(if ($feature) { $feature.State } else { 'absent' }))"
+    } elseif ($DryRun) {
+        Write-Warn2 "(dry-run) would remove the SMB1Protocol optional feature (currently $($feature.State))"
+    } else {
+        Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -WarningAction SilentlyContinue | Out-Null
+        $Script:ChangeCount++
+        $Script:RebootNeeded += 'SMB1Protocol optional feature removed'
+        Write-Warn2 "SMB1Protocol optional feature removed, was $($feature.State)"
+    }
+    Write-Ok 'The 2017 attack surface is closed: this box neither serves nor speaks SMB1'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -653,6 +718,7 @@ function Invoke-Main {
     if (-not $NoServiceSurface) { Write-Host '    - attack-surface services stopped and disabled (Spooler, RemoteRegistry)' }
     if (-not $NoNullSessions) { Write-Host '    - null sessions locked down (no anonymous enumeration, exception lists emptied)' }
     if (-not $NoDefenderPua) { Write-Host '    - Defender PUA protection: adware/bundlers/miners blocked (policy + live preference)' }
+    if (-not $NoSmb1) { Write-Host '    - SMBv1 off (server dialect, client driver, optional feature)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -673,6 +739,7 @@ function Invoke-Main {
     Disable-AttackSurfaceServices
     Disable-NullSessions
     Enable-DefenderPua
+    Disable-Smb1
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
