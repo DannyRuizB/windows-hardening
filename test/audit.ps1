@@ -75,10 +75,15 @@ else { F 'SMB server does not require signing' 'run harden.ps1 (SMB signing step
 if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' 'RequireSecuritySignature') -eq 1) {
     P 'SMB client refuses unsigned sessions'
 } else { W 'SMB client will accept unsigned sessions' 'run harden.ps1 (SMB signing step)' }
-# Wider than the baseline: SMB1 is a separate concern the script reports on
+# Step 14 owns this now (server dialect, client driver, optional feature).
 # but cannot always remove (a runner image ships it payload-removed).
 if (-not $smb.EnableSMB1Protocol) { P 'SMBv1 is disabled (no EternalBlue-era protocol)' }
-else { F 'SMBv1 is ENABLED' 'Set-SmbServerConfiguration -EnableSMB1Protocol $false; remove the optional feature' }
+else { F 'SMBv1 is ENABLED' 'run harden.ps1 (SMBv1 step); Set-SmbServerConfiguration -EnableSMB1Protocol $false; remove the optional feature' }
+if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1') -eq 0) { P 'SMB1 server dialect pinned off in the registry' }
+else { W 'SMB1 server dialect not pinned in the registry (relies on the build default)' 'run harden.ps1 (SMBv1 step): LanmanServer\Parameters\SMB1 = 0' }
+$smb1drv = Get-Service -Name mrxsmb10 -ErrorAction SilentlyContinue
+if ($null -eq $smb1drv -or $smb1drv.StartType -eq 'Disabled') { P 'SMB1 client driver (mrxsmb10) absent or disabled - this box does not speak SMB1 outbound' }
+else { W "SMB1 client driver mrxsmb10 is $($smb1drv.StartType)" 'run harden.ps1 (SMBv1 step): a downgrade attack needs a willing client' }
 
 Write-Host '-- Credential exposure ---------------------------------------'
 if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' 'UseLogonCredential') -eq 0) {
