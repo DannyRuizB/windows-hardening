@@ -248,6 +248,12 @@ $nullPipes = @((Get-Reg $srvKey 'NullSessionPipes') | Where-Object { $_ })
 if ($nullPipes.Count -eq 0) { P 'No null-session pipe exceptions' }
 else { W "Null-session pipes still listed: $($nullPipes -join ', ')" 'empty NullSessionPipes unless a legacy service truly needs it (harden.ps1 null-session step)' }
 
+Write-Host '-- Windows Script Host --------------------------------------'
+# The .vbs/.js/.wsf engine: absent = enabled (the default). A server has no
+# mail client and no user double-clicking attachments; automation is PowerShell.
+if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' 'Enabled') -eq 0) { P 'Windows Script Host is disabled machine-wide' }
+else { F 'Windows Script Host is enabled - a .vbs/.js attachment runs on double-click' 'run harden.ps1 (Script Host step): Windows Script Host\Settings\Enabled=0' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

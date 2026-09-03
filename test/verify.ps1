@@ -356,6 +356,25 @@ $feat = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorActio
 if ($null -eq $feat -or "$($feat.State)" -like 'Disabled*') { Pass "SMB1Protocol optional feature is not installed ($(if ($feat) { $feat.State } else { 'absent' }))" }
 else { Fail "SMB1Protocol optional feature is $($feat.State)" }
 
+Write-Host '== Windows Script Host off ==' -ForegroundColor White
+Test-RegEquals 'Windows Script Host disabled machine-wide' `
+    'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' 'Enabled' 0
+# THE behavioural check: a fresh cscript.exe on a one-line .vbs. With WSH
+# off it must refuse with "Windows Script Host access is disabled on this
+# machine" and never print the marker; with WSH on it prints the marker.
+$wshMarker = 'WH-WSH-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+$vbs = Join-Path $env:TEMP 'wh-verify-wsh.vbs'
+Set-Content -Path $vbs -Value "WScript.Echo `"$wshMarker`"" -Encoding ASCII
+$wshOut = (& cscript.exe //nologo $vbs 2>&1 | Out-String)
+Remove-Item $vbs -ErrorAction SilentlyContinue
+if ($wshOut -match [regex]::Escape($wshMarker)) {
+    Fail 'cscript still runs a .vbs (the marker came back - WSH is live)'
+} elseif ($wshOut -match 'disabled') {
+    Pass 'a fresh cscript.exe refuses to run a .vbs ("Windows Script Host access is disabled")'
+} else {
+    Fail "cscript neither ran the script nor said WSH is disabled: $($wshOut.Trim())"
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
