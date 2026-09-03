@@ -337,9 +337,14 @@ Test-RegEquals 'PUA block pinned as machine policy (survives a preference reset)
     'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' 'MpEnablePus' 1
 
 Write-Host '== SMBv1 off ==' -ForegroundColor White
-# The CI plants EnableSMB1Protocol on (a modern image ships it off), so the
-# server check flips red-to-green from real work. The client driver and the
-# optional feature are absent on a modern Server image and asserted as such.
+# The CI plants LanmanServer\Parameters\SMB1 = 1 (a modern image ships the
+# dialect off and the payload removed - measured: the cmdlet cannot even
+# enable it there, "The specified service does not exist"), so the registry
+# check flips red-to-green from real work; the effective read must agree.
+# The client driver and the optional feature are absent on a modern Server
+# image and asserted as such.
+Test-RegEquals 'SMB1 server dialect pinned off in the registry (payload or not)' `
+    'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1' 0
 $smb1 = Get-SmbServerConfiguration
 if (-not $smb1.EnableSMB1Protocol) { Pass 'SMB server refuses the SMB1 dialect (effective config)' }
 else { Fail 'SMB server still speaks SMB1 (EnableSMB1Protocol = True)' }

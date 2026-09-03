@@ -105,12 +105,14 @@ jobs:
           New-ItemProperty -Path $srv -Name RestrictNullSessAccess -Value 0 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $srv -Name NullSessionPipes -Value @('browser', 'srvsvc') -PropertyType MultiString -Force | Out-Null
           "planted the null-session family weak (RestrictAnonymous* 0, Everyone includes Anonymous, browser+srvsvc null pipes)"
-          # SMB1: a modern image ships the server dialect OFF (and the driver
-          # and feature absent) - absence is a default, not a planted weakness.
-          # Plant the server flag on so step 14 provably shuts the door; the
-          # other two doors are asserted as absent by verify.
-          Set-SmbServerConfiguration -EnableSMB1Protocol $true -Confirm:$false -Force
-          "planted SMB1 server dialect: EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol)"
+          # SMB1: a modern image ships the server dialect OFF with the payload
+          # REMOVED - measured: Set-SmbServerConfiguration -EnableSMB1Protocol
+          # $true fails there with "The specified service does not exist".
+          # Absence is a default, not a planted weakness, so plant the registry
+          # value the step pins (LanmanServer\Parameters\SMB1 = 1) and let step
+          # 14 provably pin it back; verify asserts the other two doors absent.
+          New-ItemProperty -Path $srv -Name SMB1 -Value 1 -PropertyType DWord -Force | Out-Null
+          "planted LanmanServer\Parameters\SMB1=1 (effective EnableSMB1Protocol reads $((Get-SmbServerConfiguration).EnableSMB1Protocol))"
 
       - name: Dry run changes nothing
         shell: powershell
@@ -134,7 +136,8 @@ jobs:
           if ($ra -ne 0) { throw "dry run changed RestrictAnonymous to $ra" }
           $puaAfter = [int](Get-MpPreference).PUAProtection
           if ($puaAfter -ne $puaBefore) { throw "dry run changed Defender PUAProtection: $puaBefore -> $puaAfter" }
-          if (-not (Get-SmbServerConfiguration).EnableSMB1Protocol) { throw "dry run disabled the planted SMB1 dialect" }
+          $smb1pin = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name SMB1).SMB1
+          if ($smb1pin -ne 1) { throw "dry run changed the planted SMB1 registry value to $smb1pin" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

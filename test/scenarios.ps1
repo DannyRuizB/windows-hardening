@@ -117,10 +117,13 @@ $scenarios = @(
        Plant  = { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' -Name MpEnablePus -ErrorAction SilentlyContinue; Set-MpPreference -PUAProtection 0 }
        Probe  = { [int](Get-MpPreference).PUAProtection -eq 0 }
        Desc   = 'PUA protection stays off' }
+    # Planted in the registry: on an image with the SMB1 payload removed the
+    # cmdlet cannot even enable the dialect ("The specified service does not
+    # exist", measured), but the pin the step writes is a registry value.
     @{ Switch = 'NoSmb1'
-       Plant  = { Set-SmbServerConfiguration -EnableSMB1Protocol $true -Confirm:$false -Force }
-       Probe  = { (Get-SmbServerConfiguration).EnableSMB1Protocol }
-       Desc   = 'the SMB1 server dialect stays enabled' }
+       Plant  = { New-ItemProperty -Path $srv -Name SMB1 -Value 1 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue $srv SMB1) -eq 1 }
+       Desc   = 'the planted SMB1 registry value survives' }
 )
 
 Write-Host ''

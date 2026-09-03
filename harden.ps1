@@ -647,10 +647,11 @@ function Disable-Smb1 {
     # no signing worth the name, no encryption, and a parser the world spent
     # 2017 patching. Nothing built this decade needs it; the clients that do
     # are the ones that should not be on the network. Three doors:
-    #   - the SERVER dialect: EnableSMB1Protocol, read back through
+    #   - the SERVER dialect: LanmanServer\Parameters\SMB1 pinned to 0 (the
+    #     registry method, works on every build) and read back through
     #     Get-SmbServerConfiguration - the effective config, the "sshd -T"
-    #     of SMB (a modern image ships it off; the CI plants it on so this
-    #     step provably shuts a door instead of confirming a default);
+    #     of SMB. The CI plants the registry value to 1 so this step provably
+    #     shuts a door instead of confirming a default;
     #   - the CLIENT redirector: the mrxsmb10 driver, so this box never
     #     speaks SMB1 outbound either (a downgrade attack needs a willing
     #     client). LanmanWorkstation lists it as a dependency, so that list
@@ -658,15 +659,31 @@ function Disable-Smb1 {
     #   - the optional FEATURE (SMB1Protocol), removed so neither can come
     #     back - a reboot may be needed to finish that removal.
     # Each door is skipped, not failed, when Windows says it is not there.
+    # The registry pin is the method Microsoft documents for every build,
+    # and the one that works whether or not the SMB1 payload is installed:
+    # MEASURED on the CI image (SMB1 DisabledWithPayloadRemoved),
+    # Set-SmbServerConfiguration -EnableSMB1Protocol fails with "The specified
+    # service does not exist" in EITHER direction, because the SMB1 server
+    # driver it toggles is not there. So: pin the value (a default is not a
+    # decision), and use the cmdlet only as the LIVE toggle where the dialect
+    # is currently negotiable.
+    $srvParams = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+    Set-RegistryValue -Path $srvParams -Name 'SMB1' -Value 0 `
+        -Because 'the server never negotiates the SMB1 dialect (pinned, payload or not)' | Out-Null
     $cfg = Get-SmbServerConfiguration
     if (-not $cfg.EnableSMB1Protocol) {
-        Write-Ok 'SMB server already refuses the SMB1 dialect'
+        Write-Ok 'SMB server refuses the SMB1 dialect (effective config)'
     } elseif ($DryRun) {
-        Write-Warn2 '(dry-run) would disable the SMB1 dialect on the server (currently enabled)'
+        Write-Warn2 '(dry-run) would disable the SMB1 dialect live (currently negotiable)'
     } else {
-        Set-SmbServerConfiguration -EnableSMB1Protocol $false -Confirm:$false -Force
-        $Script:ChangeCount++
-        Write-Warn2 'SMB server no longer speaks SMB1, was enabled'
+        try {
+            Set-SmbServerConfiguration -EnableSMB1Protocol $false -Confirm:$false -Force -ErrorAction Stop
+            $Script:ChangeCount++
+            Write-Warn2 'SMB server no longer speaks SMB1, was negotiable'
+        } catch {
+            $Script:RebootNeeded += 'SMB1 server dialect (registry pin applies at the next LanmanServer start)'
+            Write-Warn2 "live toggle unavailable ($($_.Exception.Message.Trim())) - the registry pin takes effect at the next LanmanServer start"
+        }
     }
     $client = Get-Service -Name mrxsmb10 -ErrorAction SilentlyContinue
     if ($null -eq $client) {

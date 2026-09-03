@@ -79,6 +79,8 @@ if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Paramete
 # but cannot always remove (a runner image ships it payload-removed).
 if (-not $smb.EnableSMB1Protocol) { P 'SMBv1 is disabled (no EternalBlue-era protocol)' }
 else { F 'SMBv1 is ENABLED' 'run harden.ps1 (SMBv1 step); Set-SmbServerConfiguration -EnableSMB1Protocol $false; remove the optional feature' }
+if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1') -eq 0) { P 'SMB1 server dialect pinned off in the registry' }
+else { W 'SMB1 server dialect not pinned in the registry (relies on the build default)' 'run harden.ps1 (SMBv1 step): LanmanServer\Parameters\SMB1 = 0' }
 $smb1drv = Get-Service -Name mrxsmb10 -ErrorAction SilentlyContinue
 if ($null -eq $smb1drv -or $smb1drv.StartType -eq 'Disabled') { P 'SMB1 client driver (mrxsmb10) absent or disabled - this box does not speak SMB1 outbound' }
 else { W "SMB1 client driver mrxsmb10 is $($smb1drv.StartType)" 'run harden.ps1 (SMBv1 step): a downgrade attack needs a willing client' }
