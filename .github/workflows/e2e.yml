@@ -38,6 +38,8 @@ jobs:
           Get-Content $csv | Select-String '0cce9215|0cce922b|0cce922f'
           Remove-Item $csv
           "Defender PUAProtection as shipped (0=off 1=block 2=audit): $((Get-MpPreference).PUAProtection)"
+          $wsh = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -ErrorAction SilentlyContinue).Enabled
+          "Windows Script Host as shipped: Enabled=$(if ($null -eq $wsh) { '<absent> (= enabled)' } else { $wsh })"
           "SMB1 as shipped: server EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol) mrxsmb10=$(if (Get-Service mrxsmb10 -ErrorAction SilentlyContinue) { (Get-Service mrxsmb10).StartType } else { 'absent' }) feature=$((Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State)"
           Get-Service Spooler, RemoteRegistry -ErrorAction SilentlyContinue |
             ForEach-Object { "service $($_.Name): $($_.Status)/$($_.StartType)" }
@@ -138,6 +140,8 @@ jobs:
           if ($puaAfter -ne $puaBefore) { throw "dry run changed Defender PUAProtection: $puaBefore -> $puaAfter" }
           $smb1pin = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name SMB1).SMB1
           if ($smb1pin -ne 1) { throw "dry run changed the planted SMB1 registry value to $smb1pin" }
+          $wshAfter = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -ErrorAction SilentlyContinue).Enabled
+          if ($wshAfter -eq 0) { throw "dry run disabled Windows Script Host" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

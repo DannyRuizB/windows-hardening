@@ -67,6 +67,11 @@
          (EnableSMB1Protocol), the client redirector (the mrxsmb10
          driver) and the optional feature itself, each skipped (not
          failed) when Windows says it is not there.
+     15. Windows Script Host off: wscript/cscript, the engine behind the
+         .vbs/.js/.wsf attachment that has opened more phishing chains
+         than any macro. Machine-wide Enabled=0 under Windows Script
+         Host\Settings; a server has no business running scripts from
+         a mail client, and admin automation lives in PowerShell.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -101,6 +106,7 @@ param(
     [switch]$NoNullSessions,
     [switch]$NoDefenderPua,
     [switch]$NoSmb1,
+    [switch]$NoScriptHost,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -713,6 +719,25 @@ function Disable-Smb1 {
     Write-Ok 'The 2017 attack surface is closed: this box neither serves nor speaks SMB1'
 }
 
+# ---- Step 15: Windows Script Host off ---------------------------------------
+
+function Disable-ScriptHost {
+    if ($NoScriptHost) { Write-Skip 'Skipping Windows Script Host removal'; return }
+    Write-Step 'Turning Windows Script Host off (wscript / cscript)'
+    # WSH is the engine behind .vbs, .js, .jse, .wsf and .wsh files - the
+    # attachment that has opened more phishing chains than any Office macro,
+    # because double-clicking it just RUNS. On a server there is no mail
+    # client and no user double-clicking anything legitimate; admin automation
+    # lives in PowerShell (which steps 6 and 9 already log). One machine-wide
+    # value: HKLM\SOFTWARE\Microsoft\Windows Script Host\Settings\Enabled = 0.
+    # Absent means enabled (the default), so this is a real change everywhere.
+    # Behavioural proof in verify: a fresh cscript.exe on a one-line .vbs must
+    # refuse with "Windows Script Host access is disabled on this machine".
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' `
+        -Name 'Enabled' -Value 0 -Because 'no .vbs/.js/.wsf runs on this box' | Out-Null
+    Write-Ok 'The double-click-and-it-runs attachment has nothing to run in'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -736,6 +761,7 @@ function Invoke-Main {
     if (-not $NoNullSessions) { Write-Host '    - null sessions locked down (no anonymous enumeration, exception lists emptied)' }
     if (-not $NoDefenderPua) { Write-Host '    - Defender PUA protection: adware/bundlers/miners blocked (policy + live preference)' }
     if (-not $NoSmb1) { Write-Host '    - SMBv1 off (server dialect, client driver, optional feature)' }
+    if (-not $NoScriptHost) { Write-Host '    - Windows Script Host off (no .vbs/.js/.wsf execution)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -757,6 +783,7 @@ function Invoke-Main {
     Disable-NullSessions
     Enable-DefenderPua
     Disable-Smb1
+    Disable-ScriptHost
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

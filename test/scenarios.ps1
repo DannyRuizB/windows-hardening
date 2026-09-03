@@ -125,6 +125,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path $srv -Name SMB1 -Value 1 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue $srv SMB1) -eq 1 }
        Desc   = 'the planted SMB1 registry value survives' }
+    @{ Switch = 'NoScriptHost'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -Value 1 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' Enabled) -eq 1 }
+       Desc   = 'Windows Script Host stays enabled' }
 )
 
 Write-Host ''
