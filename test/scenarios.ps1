@@ -111,6 +111,12 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path $lsa -Name RestrictAnonymous -Value 0 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue $lsa RestrictAnonymous) -eq 0 }
        Desc   = 'anonymous enumeration survives' }
+    # The policy pin goes first: policy wins over preference, so the
+    # preference alone could not be planted back to 0 under it.
+    @{ Switch = 'NoDefenderPua'
+       Plant  = { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' -Name MpEnablePus -ErrorAction SilentlyContinue; Set-MpPreference -PUAProtection 0 }
+       Probe  = { [int](Get-MpPreference).PUAProtection -eq 0 }
+       Desc   = 'PUA protection stays off' }
 )
 
 Write-Host ''

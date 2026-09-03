@@ -324,6 +324,18 @@ foreach ($listName in 'NullSessionPipes', 'NullSessionShares') {
     else { Fail "$listName still lists exceptions: $($entries -join ', ')" }
 }
 
+Write-Host '== Defender PUA protection ==' -ForegroundColor White
+# The CI image ships PUA off - the audit graded it WARN before this step
+# existed - so absence is the natural offender, nothing to plant. Effective
+# value first: Get-MpPreference is what the engine actually runs with.
+try {
+    $pua = [int](Get-MpPreference -ErrorAction Stop).PUAProtection
+    if ($pua -eq 1) { Pass "Defender blocks potentially unwanted applications (PUAProtection = $pua)" }
+    else { Fail "Defender should block PUA - PUAProtection = $pua (1 = Block)" }
+} catch { Fail 'Defender preferences unavailable - cannot confirm PUA protection' }
+Test-RegEquals 'PUA block pinned as machine policy (survives a preference reset)' `
+    'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' 'MpEnablePus' 1
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

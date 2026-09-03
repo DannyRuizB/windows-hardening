@@ -42,6 +42,7 @@ run reports **0**.
 | **AutoRun / AutoPlay** | The oldest trick on this list and still alive: a prepared USB stick, ISO or network share offering to run what's on it. Three machine-level policy values close the family: `NoDriveTypeAutoRun = 0xFF` (bit per drive type, **all eight set** — the OS default leaves several clear), `NoAutorun = 1` (autorun.inf is **never parsed** — the file that made the Conficker era), `NoAutoplayfornonVolume = 1` (no autoplay for MTP phones and cameras, the modern edge the two classics miss). The CI plants the classic weak `0x91` so the step provably tightens it, not just fills an absence. |
 | **Attack-surface services** | Two services whose job description *is* the attack story, **stopped and disabled** — either alone leaks: a stopped service with StartType Automatic returns at the next boot, a disabled-but-running one keeps serving until then. **Print Spooler** runs as SYSTEM, accepts driver packages from callers, and gave the world PrintNightmare (CVE-2021-34527) — a server that never prints runs it anyway, because it ships enabled. **RemoteRegistry** hands a remote caller this machine's registry: reconnaissance as a service, on a box that has WinRM and PowerShell for real administration. The CI plants **both running with StartType Automatic** before hardening, and verify proves the lock behaviourally: `Start-Service` against the disabled Spooler must *throw*, and no `spoolsv.exe` process survives. Graded WARN (not FAIL) in the audit — a real print server is the legitimate niche. |
 | **Null sessions** | The anonymous SMB logon (empty username, empty password) that hands over the map **before any credential is touched**: user list, share list, password policy - enum4linux's opening move, and the reason RID cycling exists. Four values, each guarding a different door: `RestrictAnonymousSAM = 1` (no anonymous SAM enumeration - the password-spray shopping list), `RestrictAnonymous = 1` (no anonymous share enumeration; **not 2**, the NT-era value that breaks trust/cluster scenarios), `EveryoneIncludesAnonymous = 0` (the anonymous token stops carrying Everyone, so every ACL granting Everyone stops covering the caller with no name), `RestrictNullSessAccess = 1` (a null session reaches only the pipes/shares explicitly listed as exceptions) - **and the exception lists themselves are pinned empty**, because `NullSessionPipes` shipping legacy entries is exactly how a "restricted" box still answers. The CI plants the whole family weak (including `browser`+`srvsvc` null pipes), so every check flips red-to-green from real work. |
+| **Defender PUA protection** | *Potentially unwanted applications* - adware, bundlers, coin miners, "optimizers" - are not malware on paper and are the most common way a box picks up code that runs with real rights; **Defender does not block them by default on Windows Server** (the CI image ships `PUAProtection = 0`, which this repo's own audit graded WARN until now). Two layers, on purpose: the **machine policy** value (`MpEnablePus = 1` under `Policies\Microsoft\Windows Defender\MpEngine`, what Group Policy writes - policy wins over the local preference and survives a `Set-MpPreference` reset) and the **live preference** (`Set-MpPreference -PUAProtection 1`, the value the engine runs with *now* and what `Get-MpPreference` reports, i.e. what verify and audit read). `1` = Block; `2` (audit mode) only logs - the "we have a control" that changes nothing - and is graded WARN. No Defender (a third-party AV owns the box) is a WARN, not a failure: the policy value still lands. The scenario for `-NoDefenderPua` removes the policy pin *before* planting the preference back to 0 - policy wins, so the preference alone could not be planted under it. |
 
 ### Deliberately *not* in the baseline
 
@@ -163,21 +164,22 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 12 steps, 45 verify checks (eight of them behavioural), a scored
+Early but honest: 13 steps, 47 verify checks (eight of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 36 PASS, 4 WARN, 0 FAIL  ->  95% compliant
+ Score: 38 PASS, 3 WARN, 0 FAIL  ->  96% compliant
 ```
 
-**94%, not 100%, on purpose.** The four warnings are the controls this baseline
-declines to apply on a machine it does not own: LSASS protected process, Defender
-real-time protection and PUA (off by design in the CI image), and the UAC consent
-prompt. Padding the score by applying them blindly would make the number prettier
-and the tool worse. On the roadmap: Defender PUA.
+**Not 100%, on purpose.** The three warnings are the controls this baseline
+declines to apply on a machine it does not own: LSASS protected process (needs a
+reboot the runner cannot take mid-run), Defender real-time protection (off by
+design in the CI image), and the UAC consent prompt. Padding the score by applying
+them blindly would make the number prettier and the tool worse. On the roadmap:
+LSASS protected process (`RunAsPPL`), staged for the next reboot.
 
 `test/scenarios.ps1` closes what used to be here: every `-No<Step>` switch is
 proven twice — the skipped step leaves its knob exactly as planted, the rest of
