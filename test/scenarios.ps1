@@ -54,6 +54,7 @@ function Get-MinPasswordLength {
 }
 
 $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$srv = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
 $wdigest = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $dnsPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient'
 $sbl = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
