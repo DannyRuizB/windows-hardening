@@ -54,6 +54,13 @@
          password policy. RestrictAnonymous family pinned, the anonymous
          token stripped of Everyone, and the server's null-session
          exception lists (pipes/shares) emptied.
+     13. Defender PUA protection: potentially unwanted applications -
+         adware, bundlers, coin miners, "optimizers" - are not malware on
+         paper and are the most common way a box picks up code that runs
+         with real rights. Defender does NOT block them by default on
+         Server. Pinned as machine policy (MpEnablePus=1, what Group
+         Policy writes - survives a preference reset) AND applied live via
+         Set-MpPreference, so the effective value flips now.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -86,6 +93,7 @@ param(
     [switch]$NoAutoRun,
     [switch]$NoServiceSurface,
     [switch]$NoNullSessions,
+    [switch]$NoDefenderPua,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -579,6 +587,50 @@ function Disable-NullSessions {
     Write-Ok 'The machine no longer answers questions from a caller with no name'
 }
 
+# ---- Step 13: Defender PUA protection ---------------------------------------
+
+function Enable-DefenderPua {
+    if ($NoDefenderPua) { Write-Skip 'Skipping Defender PUA protection'; return }
+    Write-Step 'Blocking potentially unwanted applications (Defender PUA)'
+    # PUA is the class Defender does NOT block by default on Windows Server:
+    # adware, bundlers, coin miners, "optimizers" - not malware on paper, and
+    # the most common way a box picks up code that runs with the user's (or
+    # an installer's SYSTEM) rights. Two layers, on purpose:
+    #   - the machine POLICY value (MpEnablePus under Policies\Microsoft\
+    #     Windows Defender\MpEngine - what Group Policy writes): policy wins
+    #     over the local preference and survives a Set-MpPreference reset;
+    #   - the live PREFERENCE (Set-MpPreference -PUAProtection 1): the engine
+    #     picks policy up on its own schedule, the preference flips the
+    #     effective value NOW - and it is what Get-MpPreference reports, i.e.
+    #     what verify and audit read.
+    # 1 = Block. 2 = Audit only logs - the "we have a control" that changes
+    # nothing. No Defender (a third-party AV owns the box) is a WARN, not a
+    # failure: the policy value still lands for the day Defender is back.
+    $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine'
+    Set-RegistryValue -Path $policy -Name 'MpEnablePus' -Value 1 `
+        -Because 'PUA blocked by machine policy (survives preference resets)' | Out-Null
+    try {
+        $current = [int](Get-MpPreference -ErrorAction Stop).PUAProtection
+    } catch {
+        Write-Warn2 'Defender preferences unavailable (no Defender, or another AV owns the box) - policy written, live preference skipped'
+        return
+    }
+    if ($current -eq 1) {
+        Write-Ok 'Defender PUAProtection already 1 (Block)'
+    } elseif ($DryRun) {
+        Write-Warn2 "(dry-run) would set Defender PUAProtection = 1 (currently $current)"
+    } else {
+        try {
+            Set-MpPreference -PUAProtection 1 -ErrorAction Stop
+            $Script:ChangeCount++
+            Write-Warn2 "set Defender PUAProtection = 1 (Block), was $current"
+        } catch {
+            Write-Warn2 "Set-MpPreference failed ($($_.Exception.Message.Trim())) - the policy value is written and the engine applies it on its next policy refresh"
+        }
+    }
+    Write-Ok 'Adware, bundlers and miners are blocked, not just noticed'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -600,6 +652,7 @@ function Invoke-Main {
     if (-not $NoAutoRun) { Write-Host '    - AutoRun/AutoPlay off for every drive type (incl. autorun.inf and non-volume devices)' }
     if (-not $NoServiceSurface) { Write-Host '    - attack-surface services stopped and disabled (Spooler, RemoteRegistry)' }
     if (-not $NoNullSessions) { Write-Host '    - null sessions locked down (no anonymous enumeration, exception lists emptied)' }
+    if (-not $NoDefenderPua) { Write-Host '    - Defender PUA protection: adware/bundlers/miners blocked (policy + live preference)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -619,6 +672,7 @@ function Invoke-Main {
     Disable-AutoRun
     Disable-AttackSurfaceServices
     Disable-NullSessions
+    Enable-DefenderPua
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

@@ -174,8 +174,11 @@ try {
     $mp = Get-MpPreference
     if (-not $mp.DisableRealtimeMonitoring) { P 'Defender real-time protection is on' }
     else { W 'Defender real-time protection is OFF' 'Set-MpPreference -DisableRealtimeMonitoring $false (not enforced by this baseline)' }
-    if ($mp.PUAProtection -ge 1) { P 'Potentially-unwanted-application protection is on' }
-    else { W 'PUA protection is off' 'Set-MpPreference -PUAProtection 1 (roadmap)' }
+    if ([int]$mp.PUAProtection -eq 1) { P 'Potentially-unwanted-application protection is on (Block)' }
+    elseif ([int]$mp.PUAProtection -eq 2) { W 'PUA protection is in audit mode (logs, blocks nothing)' 'run harden.ps1 (Defender PUA step)' }
+    else { W 'PUA protection is off' 'run harden.ps1 (Defender PUA step)' }
+    if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine' 'MpEnablePus') -eq 1) { P 'PUA block is pinned as machine policy' }
+    else { W 'PUA block relies on the local preference only (no policy pin)' 'run harden.ps1 (Defender PUA step)' }
 } catch { W 'Defender preferences unavailable' 'check whether Defender is present/managed on this host' }
 
 Write-Host '-- Remote access ---------------------------------------------'

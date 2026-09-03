@@ -37,6 +37,7 @@ jobs:
           auditpol /backup /file:$csv | Out-Null
           Get-Content $csv | Select-String '0cce9215|0cce922b|0cce922f'
           Remove-Item $csv
+          "Defender PUAProtection as shipped (0=off 1=block 2=audit): $((Get-MpPreference).PUAProtection)"
           Get-Service Spooler, RemoteRegistry -ErrorAction SilentlyContinue |
             ForEach-Object { "service $($_.Name): $($_.Status)/$($_.StartType)" }
 
@@ -108,6 +109,7 @@ jobs:
         shell: powershell
         run: |
           $before = (Get-SmbServerConfiguration).RequireSecuritySignature
+          $puaBefore = [int](Get-MpPreference).PUAProtection
           .\harden.ps1 -DryRun
           $after = (Get-SmbServerConfiguration).RequireSecuritySignature
           if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
@@ -123,6 +125,8 @@ jobs:
           if ((Get-Service Spooler).Status -ne 'Running') { throw "dry run stopped the Spooler" }
           $ra = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictAnonymous).RestrictAnonymous
           if ($ra -ne 0) { throw "dry run changed RestrictAnonymous to $ra" }
+          $puaAfter = [int](Get-MpPreference).PUAProtection
+          if ($puaAfter -ne $puaBefore) { throw "dry run changed Defender PUAProtection: $puaBefore -> $puaAfter" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
