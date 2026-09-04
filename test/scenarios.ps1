@@ -141,6 +141,10 @@ $scenarios = @(
        Plant  = { Set-NetFirewallProfile -Name Public -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096 }
        Probe  = { "$((Get-NetFirewallProfile -Name Public).LogBlocked)" -eq 'False' }
        Desc   = 'the Public profile stays silent about dropped packets' }
+    @{ Switch = 'NoSmbGuest'
+       Plant  = { Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force }
+       Probe  = { (Get-SmbClientConfiguration).EnableInsecureGuestLogons -eq $true }
+       Desc   = 'the SMB client keeps accepting insecure guest logons' }
 )
 
 Write-Host ''

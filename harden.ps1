@@ -109,6 +109,7 @@ param(
     [switch]$NoScriptHost,
     [switch]$NoEventLogSize,
     [switch]$NoFirewallLogging,
+    [switch]$NoSmbGuest,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -818,6 +819,37 @@ function Set-FirewallLogging {
     Write-Ok 'A scan or a brute force leaves a line per packet in pfirewall.log - and so does the connection that got through'
 }
 
+# ---- Step 18: SMB client - insecure guest logons off --------------------------
+
+function Disable-SmbGuestLogons {
+    if ($NoSmbGuest) { Write-Skip 'Skipping SMB insecure guest logons'; return }
+    Write-Step 'Refusing insecure guest logons on the SMB client (CIS 18.6.8.1)'
+    # A guest logon is a session with NO authentication - and with no
+    # authentication there is no signing, no encryption and no identity on the
+    # other end. It is how a rogue share (the "evil installer" share, the
+    # spoofed file server after a name-poisoning win) gets mounted without a
+    # single credential ever being challenged. Step 1 made the client require
+    # signing, which already refuses guest sessions in practice; this step
+    # closes the door by its own name so a future relaxation of signing does
+    # not silently reopen it. Two layers, the SMB1 pattern: the POLICY value
+    # (LanmanWorkstation\AllowInsecureGuestAuth = 0, what Group Policy
+    # writes) and the LIVE client setting (Set-SmbClientConfiguration), read
+    # back effective from Get-SmbClientConfiguration.
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation' `
+        -Name 'AllowInsecureGuestAuth' -Value 0 -Because 'policy pin: no unauthenticated SMB sessions' | Out-Null
+    $cli = Get-SmbClientConfiguration
+    if (-not $cli.EnableInsecureGuestLogons) {
+        Write-Ok 'SMB client already refuses insecure guest logons (effective config)'
+    } elseif ($DryRun) {
+        Write-Warn2 '(dry-run) would disable insecure guest logons on the SMB client live (currently enabled)'
+    } else {
+        Set-SmbClientConfiguration -EnableInsecureGuestLogons $false -Force
+        $Script:ChangeCount++
+        Write-Warn2 'SMB client no longer accepts insecure guest logons, was enabled'
+    }
+    Write-Ok 'No share mounts without a credential being challenged - the spoofed file server gets nothing'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -844,6 +876,7 @@ function Invoke-Main {
     if (-not $NoScriptHost) { Write-Host '    - Windows Script Host off (no .vbs/.js/.wsf execution)' }
     if (-not $NoEventLogSize) { Write-Host '    - event log capacity: Security 192 MB, System/Application 32 MB (policy + live, never shrinks)' }
     if (-not $NoFirewallLogging) { Write-Host '    - firewall logging: dropped and allowed connections, 16 MB per profile' }
+    if (-not $NoSmbGuest) { Write-Host '    - SMB client: insecure guest logons refused (policy + live)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -868,6 +901,7 @@ function Invoke-Main {
     Disable-ScriptHost
     Set-EventLogCapacity
     Set-FirewallLogging
+    Disable-SmbGuestLogons
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
