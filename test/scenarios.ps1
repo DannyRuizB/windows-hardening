@@ -129,6 +129,12 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -Value 1 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' Enabled) -eq 1 }
        Desc   = 'Windows Script Host stays enabled' }
+    # The policy pin is removed first so the shrink lands on a box that looks
+    # unhardened for this step; the switch must then leave the 1 MB floor alone.
+    @{ Switch = 'NoEventLogSize'
+       Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security' -Recurse -Force -ErrorAction SilentlyContinue; & wevtutil.exe sl Security /ms:1052672 | Out-Null }
+       Probe  = { [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes -lt (196608 * 1024) }
+       Desc   = 'the shrunken Security log (1 MB floor) survives' }
 )
 
 Write-Host ''

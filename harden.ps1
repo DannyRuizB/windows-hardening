@@ -107,6 +107,7 @@ param(
     [switch]$NoDefenderPua,
     [switch]$NoSmb1,
     [switch]$NoScriptHost,
+    [switch]$NoEventLogSize,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -738,6 +739,46 @@ function Disable-ScriptHost {
     Write-Ok 'The double-click-and-it-runs attachment has nothing to run in'
 }
 
+# ---- Step 16: event log capacity --------------------------------------------
+
+function Set-EventLogCapacity {
+    if ($NoEventLogSize) { Write-Skip 'Skipping event log capacity'; return }
+    Write-Step 'Sizing the event logs so the evidence survives (Security 192 MB, System/Application 32 MB)'
+    # Step 9 switched the events ON (4624/4625 logons, 4688 process creation
+    # with its command line, 4719 audit-policy changes). This step makes sure
+    # they are still THERE when someone needs them. Windows ships every log at
+    # 20 MB, circular: a 4625 is about 1 KB, so a password spray at a modest
+    # 50 attempts a second wraps the Security log in roughly seven minutes -
+    # and the 4719 that recorded who switched auditing off goes with it.
+    # CIS 18.10.25.x: Security 196608 KB (192 MB), Application and System
+    # 32768 KB. Two layers, the audit-policy pattern: the POLICY value
+    # (HKLM\SOFTWARE\Policies\Microsoft\Windows\EventLog\<Log>\MaxSize, in KB)
+    # so the size survives anyone "fixing" it in Event Viewer, and the LIVE
+    # channel (wevtutil sl /ms:) so it applies now, not at the next service
+    # start. Never shrinks: a log an admin made bigger stays bigger. Retention
+    # stays circular (overwrite as needed) - "do not overwrite" stops logging
+    # when full, which is exactly the outage an attacker would order.
+    $targets = [ordered]@{ Security = 196608; System = 32768; Application = 32768 }
+    foreach ($log in $targets.Keys) {
+        $kb = [int64]$targets[$log]
+        $bytes = $kb * 1024
+        $live = [int64](Get-WinEvent -ListLog $log -ErrorAction Stop).MaximumSizeInBytes
+        if ($live -ge $bytes) {
+            Write-Ok "$log log already holds $([math]::Round($live / 1MB)) MB (effective)"
+        } elseif ($DryRun) {
+            Write-Warn2 "(dry-run) would grow the $log log to $($kb / 1024) MB live (currently $([math]::Round($live / 1MB, 1)) MB)"
+        } else {
+            & wevtutil.exe sl $log /ms:$bytes
+            if ($LASTEXITCODE -ne 0) { throw "wevtutil could not resize the $log log (exit $LASTEXITCODE)" }
+            $Script:ChangeCount++
+            Write-Warn2 "$log log grown to $($kb / 1024) MB live, was $([math]::Round($live / 1MB, 1)) MB"
+        }
+        Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\$log" `
+            -Name 'MaxSize' -Value $kb -Because 'policy pin in KB - survives Event Viewer edits' | Out-Null
+    }
+    Write-Ok 'A brute force now has to run for hours, not minutes, to push its own trace out of the log'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -762,6 +803,7 @@ function Invoke-Main {
     if (-not $NoDefenderPua) { Write-Host '    - Defender PUA protection: adware/bundlers/miners blocked (policy + live preference)' }
     if (-not $NoSmb1) { Write-Host '    - SMBv1 off (server dialect, client driver, optional feature)' }
     if (-not $NoScriptHost) { Write-Host '    - Windows Script Host off (no .vbs/.js/.wsf execution)' }
+    if (-not $NoEventLogSize) { Write-Host '    - event log capacity: Security 192 MB, System/Application 32 MB (policy + live, never shrinks)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -784,6 +826,7 @@ function Invoke-Main {
     Enable-DefenderPua
     Disable-Smb1
     Disable-ScriptHost
+    Set-EventLogCapacity
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
