@@ -396,6 +396,20 @@ $secLog = Get-WinEvent -ListLog Security
 if ("$($secLog.LogMode)" -eq 'Circular') { Pass 'Security log overwrites as needed (circular) - it never stops recording when full' }
 else { Fail "Security log mode is $($secLog.LogMode) - a full log would stop recording" }
 
+Write-Host '== Firewall logging ==' -ForegroundColor White
+# The CI plants every profile silent (dropped off, allowed off, 4096 KB) before
+# hardening, so each line below flips red-to-green from real work. Effective
+# values from Get-NetFirewallProfile; GpoBoolean compared as text.
+foreach ($name in @('Domain', 'Private', 'Public')) {
+    $fwl = Get-NetFirewallProfile -Name $name
+    if ("$($fwl.LogBlocked)" -eq 'True') { Pass "$name profile logs dropped packets" }
+    else { Fail "$name profile does not log dropped packets (LogBlocked=$($fwl.LogBlocked))" }
+    if ("$($fwl.LogAllowed)" -eq 'True') { Pass "$name profile logs successful connections" }
+    else { Fail "$name profile does not log successful connections (LogAllowed=$($fwl.LogAllowed))" }
+    if ([int]$fwl.LogMaxSizeKilobytes -ge 16384) { Pass "$name profile log holds at least 16 MB ($($fwl.LogMaxSizeKilobytes) KB)" }
+    else { Fail "$name profile log is only $($fwl.LogMaxSizeKilobytes) KB (expected >= 16384)" }
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
