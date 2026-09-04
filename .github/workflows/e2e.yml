@@ -40,6 +40,7 @@ jobs:
           "Defender PUAProtection as shipped (0=off 1=block 2=audit): $((Get-MpPreference).PUAProtection)"
           $wsh = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -ErrorAction SilentlyContinue).Enabled
           "Windows Script Host as shipped: Enabled=$(if ($null -eq $wsh) { '<absent> (= enabled)' } else { $wsh })"
+          "event logs as shipped: " + ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { "$($_.LogName)=$([math]::Round($_.MaximumSizeInBytes / 1MB)) MB/$($_.LogMode)" }) -join ' ')
           "SMB1 as shipped: server EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol) mrxsmb10=$(if (Get-Service mrxsmb10 -ErrorAction SilentlyContinue) { (Get-Service mrxsmb10).StartType } else { 'absent' }) feature=$((Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State)"
           Get-Service Spooler, RemoteRegistry -ErrorAction SilentlyContinue |
             ForEach-Object { "service $($_.Name): $($_.Status)/$($_.StartType)" }
@@ -57,6 +58,15 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
             -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
           "planted NoLMHash=0 and WDigest UseLogonCredential=1"
+          # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
+          # minimum. The Security channel will NOT go below 20 MB (measured on
+          # this runner: the 1 MB request returns quietly and the effective size
+          # stays 20971520) - its shipped 20 MB is already a tenth of the target,
+          # so it needs no plant; the read-back below shows the floor.
+          & wevtutil.exe sl System /ms:1052672
+          & wevtutil.exe sl Application /ms:1052672
+          & wevtutil.exe sl Security /ms:1052672
+          "event logs planted: " + ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { "$($_.LogName)=$([math]::Round($_.MaximumSizeInBytes / 1MB, 1)) MB" }) -join ' ') + " (Security asked 1 MB: the channel floor is 20 MB)"
           # Measured: the Azure-built runner image ships RDP ACCEPTING
           # connections (fDenyTSConnections=0) with all three knobs already at
           # target (NLA=1, SecurityLayer=2, MinEncryptionLevel=3) - without
@@ -121,6 +131,7 @@ jobs:
         run: |
           $before = (Get-SmbServerConfiguration).RequireSecuritySignature
           $puaBefore = [int](Get-MpPreference).PUAProtection
+          $evtBefore = ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { $_.MaximumSizeInBytes }) -join ',')
           .\harden.ps1 -DryRun
           $after = (Get-SmbServerConfiguration).RequireSecuritySignature
           if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
@@ -142,6 +153,8 @@ jobs:
           if ($smb1pin -ne 1) { throw "dry run changed the planted SMB1 registry value to $smb1pin" }
           $wshAfter = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' -Name Enabled -ErrorAction SilentlyContinue).Enabled
           if ($wshAfter -eq 0) { throw "dry run disabled Windows Script Host" }
+          $evtAfter = ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { $_.MaximumSizeInBytes }) -join ',')
+          if ($evtAfter -ne $evtBefore) { throw "dry run resized an event log: $evtBefore -> $evtAfter" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

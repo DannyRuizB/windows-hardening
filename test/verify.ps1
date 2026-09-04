@@ -375,6 +375,27 @@ if ($wshOut -match [regex]::Escape($wshMarker)) {
     Fail "cscript neither ran the script nor said WSH is disabled: $($wshOut.Trim())"
 }
 
+Write-Host '== Event log capacity ==' -ForegroundColor White
+# The CI shrinks System and Application to 1 MB before hardening (Security
+# refuses to go below its 20 MB floor - measured - and 20 MB is already the
+# offender), so the effective sizes below flip red-to-green from real work.
+# Capacity is the one control that cannot be probed until it is needed:
+# verify reads the EFFECTIVE value from the EventLog service (not the
+# registry) plus the policy pin that keeps it there.
+foreach ($pair in @(@('Security', 196608), @('System', 32768), @('Application', 32768))) {
+    $log = $pair[0]; $kb = [int64]$pair[1]
+    $cfg = Get-WinEvent -ListLog $log
+    if ([int64]$cfg.MaximumSizeInBytes -ge ($kb * 1024)) {
+        Pass "$log log holds at least $($kb / 1024) MB (effective: $([math]::Round($cfg.MaximumSizeInBytes / 1MB)) MB)"
+    } else {
+        Fail "$log log is only $([math]::Round($cfg.MaximumSizeInBytes / 1MB, 1)) MB (expected >= $($kb / 1024) MB)"
+    }
+    Test-RegEquals "$log log size pinned by policy" "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\$log" 'MaxSize' $kb
+}
+$secLog = Get-WinEvent -ListLog Security
+if ("$($secLog.LogMode)" -eq 'Circular') { Pass 'Security log overwrites as needed (circular) - it never stops recording when full' }
+else { Fail "Security log mode is $($secLog.LogMode) - a full log would stop recording" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

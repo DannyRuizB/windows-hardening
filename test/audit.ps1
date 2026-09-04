@@ -254,6 +254,16 @@ Write-Host '-- Windows Script Host --------------------------------------'
 if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings' 'Enabled') -eq 0) { P 'Windows Script Host is disabled machine-wide' }
 else { F 'Windows Script Host is enabled - a .vbs/.js attachment runs on double-click' 'run harden.ps1 (Script Host step): Windows Script Host\Settings\Enabled=0' }
 
+Write-Host '-- Event log capacity ---------------------------------------'
+# Step 9 turned the events on; this keeps them. 20 MB (the default) of
+# Security log is minutes of a password spray. CIS 18.10.25.x sizes.
+foreach ($pair in @(@('Security', 196608), @('System', 32768), @('Application', 32768))) {
+    $log = $pair[0]; $kb = [int64]$pair[1]
+    $mb = [math]::Round((Get-WinEvent -ListLog $log).MaximumSizeInBytes / 1MB)
+    if ($mb -ge ($kb / 1024)) { P "$log log holds $mb MB (>= $($kb / 1024) MB)" }
+    else { W "$log log holds only $mb MB - a burst of events pushes the evidence out in minutes" "run harden.ps1 (event log step): wevtutil sl $log /ms:$($kb * 1024) and policy EventLog\$log\MaxSize=$kb" }
+}
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
