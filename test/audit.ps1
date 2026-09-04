@@ -276,6 +276,13 @@ foreach ($name in @('Domain', 'Private', 'Public')) {
     }
 }
 
+Write-Host '-- SMB client: guest logons ---------------------------------'
+# No authentication means no signing, no encryption, no identity: a spoofed
+# share mounts silently. CIS 18.6.8.1.
+$smbCli = Get-SmbClientConfiguration
+if (-not $smbCli.EnableInsecureGuestLogons) { P 'SMB client refuses insecure guest logons' }
+else { F 'SMB client accepts insecure guest logons - a rogue share mounts with no credential challenged' 'run harden.ps1 (SMB guest step): Set-SmbClientConfiguration -EnableInsecureGuestLogons $false' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

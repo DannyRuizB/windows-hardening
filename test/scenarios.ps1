@@ -141,6 +141,14 @@ $scenarios = @(
        Plant  = { Set-NetFirewallProfile -Name Public -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096 }
        Probe  = { "$((Get-NetFirewallProfile -Name Public).LogBlocked)" -eq 'False' }
        Desc   = 'the Public profile stays silent about dropped packets' }
+    # Measured in the CI: the policy value is authoritative and read LIVE - with
+    # AllowInsecureGuestAuth=0 in place, Set-SmbClientConfiguration $true does
+    # not take (the first plant "could not even be planted"). Remove the pin
+    # first so the plant lands, then the switch must leave both alone.
+    @{ Switch = 'NoSmbGuest'
+       Plant  = { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation' -Name AllowInsecureGuestAuth -ErrorAction SilentlyContinue; Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force }
+       Probe  = { (Get-SmbClientConfiguration).EnableInsecureGuestLogons -eq $true }
+       Desc   = 'the SMB client keeps accepting insecure guest logons' }
 )
 
 Write-Host ''

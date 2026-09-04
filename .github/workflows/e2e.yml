@@ -25,6 +25,7 @@ jobs:
         run: |
           "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
           "SMB RequireSecuritySignature: $((Get-SmbServerConfiguration).RequireSecuritySignature)"
+          "SMB client EnableInsecureGuestLogons as shipped: $((Get-SmbClientConfiguration).EnableInsecureGuestLogons)"
           Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction) logdropped=$($_.LogBlocked) logallowed=$($_.LogAllowed) logsize=$($_.LogMaxSizeKilobytes)KB" }
           (net accounts) | Select-String 'Minimum password length|history'
           $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
@@ -63,6 +64,10 @@ jobs:
           # planting all three makes every verify line a real flip).
           Set-NetFirewallProfile -All -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096
           "planted firewall logging off (dropped, allowed) and 4096 KB on all profiles"
+          # Step 18 offender: Server ships insecure guest logons OFF, so enable them
+          # (the tautology trap again) and let the step do the work.
+          Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force
+          "planted SMB client EnableInsecureGuestLogons=$((Get-SmbClientConfiguration).EnableInsecureGuestLogons)"
           # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
           # minimum. The Security channel will NOT go below 20 MB (measured on
           # this runner: the 1 MB request returns quietly and the effective size
@@ -138,6 +143,7 @@ jobs:
           $puaBefore = [int](Get-MpPreference).PUAProtection
           $evtBefore = ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { $_.MaximumSizeInBytes }) -join ',')
           $fwlBefore = ((Get-NetFirewallProfile | ForEach-Object { "$($_.LogBlocked)/$($_.LogAllowed)/$($_.LogMaxSizeKilobytes)" }) -join ',')
+          $guestBefore = (Get-SmbClientConfiguration).EnableInsecureGuestLogons
           .\harden.ps1 -DryRun
           $after = (Get-SmbServerConfiguration).RequireSecuritySignature
           if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
@@ -163,6 +169,8 @@ jobs:
           if ($evtAfter -ne $evtBefore) { throw "dry run resized an event log: $evtBefore -> $evtAfter" }
           $fwlAfter = ((Get-NetFirewallProfile | ForEach-Object { "$($_.LogBlocked)/$($_.LogAllowed)/$($_.LogMaxSizeKilobytes)" }) -join ',')
           if ($fwlAfter -ne $fwlBefore) { throw "dry run changed firewall logging: $fwlBefore -> $fwlAfter" }
+          $guestAfter = (Get-SmbClientConfiguration).EnableInsecureGuestLogons
+          if ($guestAfter -ne $guestBefore) { throw "dry run changed SMB guest logons: $guestBefore -> $guestAfter" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

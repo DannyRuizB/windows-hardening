@@ -410,6 +410,16 @@ foreach ($name in @('Domain', 'Private', 'Public')) {
     else { Fail "$name profile log is only $($fwl.LogMaxSizeKilobytes) KB (expected >= 16384)" }
 }
 
+Write-Host '== SMB client: insecure guest logons ==' -ForegroundColor White
+# The CI plants guest logons ENABLED before hardening (Server ships them off),
+# so both lines flip red-to-green from real work: the policy pin and the
+# effective client setting.
+Test-RegEquals 'insecure guest logons pinned off by policy' `
+    'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation' 'AllowInsecureGuestAuth' 0
+$smbCli = Get-SmbClientConfiguration
+if (-not $smbCli.EnableInsecureGuestLogons) { Pass 'SMB client refuses insecure guest logons (effective config)' }
+else { Fail 'SMB client still accepts insecure guest logons (EnableInsecureGuestLogons=True)' }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
