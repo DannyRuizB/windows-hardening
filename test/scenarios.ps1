@@ -149,6 +149,10 @@ $scenarios = @(
        Plant  = { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation' -Name AllowInsecureGuestAuth -ErrorAction SilentlyContinue; Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force }
        Probe  = { (Get-SmbClientConfiguration).EnableInsecureGuestLogons -eq $true }
        Desc   = 'the SMB client keeps accepting insecure guest logons' }
+    @{ Switch = 'NoHardenedUnc'
+       Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Recurse -Force -ErrorAction SilentlyContinue }
+       Probe  = { -not (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Name '\\*\SYSVOL' -ErrorAction SilentlyContinue) }
+       Desc   = 'SYSVOL/NETLOGON stay unhardened (no HardenedPaths values)' }
 )
 
 Write-Host ''

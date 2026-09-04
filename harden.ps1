@@ -110,6 +110,7 @@ param(
     [switch]$NoEventLogSize,
     [switch]$NoFirewallLogging,
     [switch]$NoSmbGuest,
+    [switch]$NoHardenedUnc,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -854,6 +855,31 @@ function Disable-SmbGuestLogons {
     Write-Ok 'No share mounts without a credential being challenged - the spoofed file server gets nothing'
 }
 
+# ---- Step 19: Hardened UNC paths --------------------------------------------
+
+function Set-HardenedUncPaths {
+    if ($NoHardenedUnc) { Write-Skip 'Skipping Hardened UNC paths'; return }
+    Write-Step 'Requiring mutual auth and integrity on UNC paths (CIS 18.6.14.1)'
+    # A UNC fetch (a mapped drive, a logon script from \\server\NETLOGON, an
+    # installer run from a file share) trusts whatever answers the name. Name
+    # resolution is spoofable (the LLMNR/NetBIOS story of step 3), so an
+    # attacker who wins the race serves a malicious SYSVOL/NETLOGON or share
+    # and the client runs it. Hardened UNC paths make the client REFUSE a
+    # path unless the server proves its identity (RequireMutualAuthentication)
+    # and the bytes are integrity-protected (RequireIntegrity) - a signed,
+    # authenticated channel or nothing. Two paths cover the domain-critical
+    # shares; even standalone the pin is harmless and closes the share-MITM
+    # door for good. Values are REG_SZ ("RequireMutualAuthentication=1,
+    # RequireIntegrity=1"), absent on a stock server (a real change).
+    $hp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths'
+    $val = 'RequireMutualAuthentication=1, RequireIntegrity=1'
+    foreach ($unc in @('\\*\SYSVOL', '\\*\NETLOGON')) {
+        Set-RegistryValue -Path $hp -Name $unc -Value $val -Type String `
+            -Because 'no UNC fetch without a proven, integrity-checked server' | Out-Null
+    }
+    Write-Ok 'A spoofed file server cannot feed this client a logon script or share over UNC'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -881,6 +907,7 @@ function Invoke-Main {
     if (-not $NoEventLogSize) { Write-Host '    - event log capacity: Security 192 MB, System/Application 32 MB (policy + live, never shrinks)' }
     if (-not $NoFirewallLogging) { Write-Host '    - firewall logging: dropped and allowed connections, 16 MB per profile' }
     if (-not $NoSmbGuest) { Write-Host '    - SMB client: insecure guest logons refused (policy + live)' }
+    if (-not $NoHardenedUnc) { Write-Host '    - Hardened UNC paths: SYSVOL/NETLOGON require mutual auth + integrity' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -906,6 +933,7 @@ function Invoke-Main {
     Set-EventLogCapacity
     Set-FirewallLogging
     Disable-SmbGuestLogons
+    Set-HardenedUncPaths
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

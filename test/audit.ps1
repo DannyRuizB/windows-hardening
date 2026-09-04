@@ -283,6 +283,20 @@ $smbCli = Get-SmbClientConfiguration
 if (-not $smbCli.EnableInsecureGuestLogons) { P 'SMB client refuses insecure guest logons' }
 else { F 'SMB client accepts insecure guest logons - a rogue share mounts with no credential challenged' 'run harden.ps1 (SMB guest step): Set-SmbClientConfiguration -EnableInsecureGuestLogons $false' }
 
+Write-Host '-- Hardened UNC paths ---------------------------------------'
+# A UNC fetch trusts whatever answers the name; name resolution is spoofable.
+# CIS 18.6.14.1: SYSVOL/NETLOGON require mutual auth + integrity.
+$hp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths'
+foreach ($unc in @('\\*\SYSVOL', '\\*\NETLOGON')) {
+    $v = Get-Reg $hp $unc
+    if ($v -match 'RequireMutualAuthentication=1' -and $v -match 'RequireIntegrity=1') {
+        P "$unc requires mutual auth and integrity"
+    } else {
+        $shown = if ($v) { $v } else { '<absent>' }
+        F "$unc is not hardened ($shown) - a spoofed server can feed this client over UNC" "run harden.ps1 (Hardened UNC step)"
+    }
+}
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
