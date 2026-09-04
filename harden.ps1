@@ -834,7 +834,11 @@ function Disable-SmbGuestLogons {
     # not silently reopen it. Two layers, the SMB1 pattern: the POLICY value
     # (LanmanWorkstation\AllowInsecureGuestAuth = 0, what Group Policy
     # writes) and the LIVE client setting (Set-SmbClientConfiguration), read
-    # back effective from Get-SmbClientConfiguration.
+    # back effective from Get-SmbClientConfiguration. Measured in the CI: the
+    # policy value is authoritative and read live - writing the pin flipped
+    # the effective setting to False before the cmdlet ever ran, and with the
+    # pin in place Set-SmbClientConfiguration $true does not take. The live
+    # branch below is for boxes without the policy path.
     Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation' `
         -Name 'AllowInsecureGuestAuth' -Value 0 -Because 'policy pin: no unauthenticated SMB sessions' | Out-Null
     $cli = Get-SmbClientConfiguration
