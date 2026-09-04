@@ -376,8 +376,9 @@ if ($wshOut -match [regex]::Escape($wshMarker)) {
 }
 
 Write-Host '== Event log capacity ==' -ForegroundColor White
-# The CI shrinks the Security log to its 1 MB floor before hardening, so the
-# effective size below flips red-to-green from real work, not from a default.
+# The CI shrinks System and Application to 1 MB before hardening (Security
+# refuses to go below its 20 MB floor - measured - and 20 MB is already the
+# offender), so the effective sizes below flip red-to-green from real work.
 # Capacity is the one control that cannot be probed until it is needed:
 # verify reads the EFFECTIVE value from the EventLog service (not the
 # registry) plus the policy pin that keeps it there.

@@ -758,6 +758,9 @@ function Set-EventLogCapacity {
     # start. Never shrinks: a log an admin made bigger stays bigger. Retention
     # stays circular (overwrite as needed) - "do not overwrite" stops logging
     # when full, which is exactly the outage an attacker would order.
+    # Measured on the CI runner: the Security channel will not go below
+    # 20 MB (a 1 MB request returns quietly, the effective size stays
+    # 20971520) - the shipped size IS the floor, and a tenth of the target.
     $targets = [ordered]@{ Security = 196608; System = 32768; Application = 32768 }
     foreach ($log in $targets.Keys) {
         $kb = [int64]$targets[$log]
