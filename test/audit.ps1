@@ -264,6 +264,18 @@ foreach ($pair in @(@('Security', 196608), @('System', 32768), @('Application', 
     else { W "$log log holds only $mb MB - a burst of events pushes the evidence out in minutes" "run harden.ps1 (event log step): wevtutil sl $log /ms:$($kb * 1024) and policy EventLog\$log\MaxSize=$kb" }
 }
 
+Write-Host '-- Firewall logging -----------------------------------------'
+# A firewall that denies in silence: the scan and the brute force vanish, and
+# so does the connection that got through. CIS 9.x per profile.
+foreach ($name in @('Domain', 'Private', 'Public')) {
+    $fwl = Get-NetFirewallProfile -Name $name
+    if ("$($fwl.LogBlocked)" -eq 'True' -and "$($fwl.LogAllowed)" -eq 'True' -and [int]$fwl.LogMaxSizeKilobytes -ge 16384) {
+        P "$name profile logs dropped and allowed connections ($($fwl.LogMaxSizeKilobytes) KB)"
+    } else {
+        W "$name profile logging: dropped=$($fwl.LogBlocked) allowed=$($fwl.LogAllowed) size=$($fwl.LogMaxSizeKilobytes) KB" 'run harden.ps1 (firewall logging step): Set-NetFirewallProfile -LogBlocked True -LogAllowed True -LogMaxSizeKilobytes 16384'
+    }
+}
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

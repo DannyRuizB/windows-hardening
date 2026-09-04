@@ -137,6 +137,10 @@ $scenarios = @(
        Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Application' -Recurse -Force -ErrorAction SilentlyContinue; & wevtutil.exe sl Application /ms:1052672 | Out-Null }
        Probe  = { [int64](Get-WinEvent -ListLog Application).MaximumSizeInBytes -lt (32768 * 1024) }
        Desc   = 'the shrunken Application log (1 MB) survives' }
+    @{ Switch = 'NoFirewallLogging'
+       Plant  = { Set-NetFirewallProfile -Name Public -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096 }
+       Probe  = { "$((Get-NetFirewallProfile -Name Public).LogBlocked)" -eq 'False' }
+       Desc   = 'the Public profile stays silent about dropped packets' }
 )
 
 Write-Host ''

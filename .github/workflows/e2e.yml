@@ -25,7 +25,7 @@ jobs:
         run: |
           "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
           "SMB RequireSecuritySignature: $((Get-SmbServerConfiguration).RequireSecuritySignature)"
-          Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction)" }
+          Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction) logdropped=$($_.LogBlocked) logallowed=$($_.LogAllowed) logsize=$($_.LogMaxSizeKilobytes)KB" }
           (net accounts) | Select-String 'Minimum password length|history'
           $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
           "RDP fDenyTSConnections: $((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)"
@@ -58,6 +58,11 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' `
             -Name UseLogonCredential -Value 1 -PropertyType DWord -Force | Out-Null
           "planted NoLMHash=0 and WDigest UseLogonCredential=1"
+          # Step 17 offenders: every profile silent - dropped off, allowed off,
+          # the shipped 4096 KB log (the runner may ship some of this already;
+          # planting all three makes every verify line a real flip).
+          Set-NetFirewallProfile -All -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096
+          "planted firewall logging off (dropped, allowed) and 4096 KB on all profiles"
           # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
           # minimum. The Security channel will NOT go below 20 MB (measured on
           # this runner: the 1 MB request returns quietly and the effective size
@@ -132,6 +137,7 @@ jobs:
           $before = (Get-SmbServerConfiguration).RequireSecuritySignature
           $puaBefore = [int](Get-MpPreference).PUAProtection
           $evtBefore = ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { $_.MaximumSizeInBytes }) -join ',')
+          $fwlBefore = ((Get-NetFirewallProfile | ForEach-Object { "$($_.LogBlocked)/$($_.LogAllowed)/$($_.LogMaxSizeKilobytes)" }) -join ',')
           .\harden.ps1 -DryRun
           $after = (Get-SmbServerConfiguration).RequireSecuritySignature
           if ($before -ne $after) { throw "dry run changed SMB signing: $before -> $after" }
@@ -155,6 +161,8 @@ jobs:
           if ($wshAfter -eq 0) { throw "dry run disabled Windows Script Host" }
           $evtAfter = ((Get-WinEvent -ListLog Security, System, Application | ForEach-Object { $_.MaximumSizeInBytes }) -join ',')
           if ($evtAfter -ne $evtBefore) { throw "dry run resized an event log: $evtBefore -> $evtAfter" }
+          $fwlAfter = ((Get-NetFirewallProfile | ForEach-Object { "$($_.LogBlocked)/$($_.LogAllowed)/$($_.LogMaxSizeKilobytes)" }) -join ',')
+          if ($fwlAfter -ne $fwlBefore) { throw "dry run changed firewall logging: $fwlBefore -> $fwlAfter" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

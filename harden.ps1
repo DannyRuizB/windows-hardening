@@ -108,6 +108,7 @@ param(
     [switch]$NoSmb1,
     [switch]$NoScriptHost,
     [switch]$NoEventLogSize,
+    [switch]$NoFirewallLogging,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -293,8 +294,9 @@ function Set-FirewallPosture {
             Write-Warn2 "(dry-run) would set $profileName to enabled + inbound Block (currently Enabled=$($p.Enabled), Inbound=$($p.DefaultInboundAction))"
             continue
         }
+        # Logging is step 17's business (per profile, dropped + allowed, 16 MB).
         Set-NetFirewallProfile -Name $profileName -Enabled True -DefaultInboundAction Block `
-            -DefaultOutboundAction Allow -LogBlocked True -NotifyOnListen False
+            -DefaultOutboundAction Allow -NotifyOnListen False
         $Script:ChangeCount++
         Write-Warn2 "$profileName profile set to enabled + inbound Block, was Enabled=$($p.Enabled), Inbound=$($p.DefaultInboundAction)"
     }
@@ -782,6 +784,40 @@ function Set-EventLogCapacity {
     Write-Ok 'A brute force now has to run for hours, not minutes, to push its own trace out of the log'
 }
 
+# ---- Step 17: firewall logging ----------------------------------------------
+
+function Set-FirewallLogging {
+    if ($NoFirewallLogging) { Write-Skip 'Skipping firewall logging'; return }
+    Write-Step 'Making the firewall write down what it drops and what it lets in (all profiles, 16 MB each)'
+    # Step 5 made the firewall deny by default. A firewall that denies in
+    # SILENCE is the Windows twin of the Linux siblings' drop-without-log:
+    # the port scan and the brute force vanish, and the one connection an
+    # attacker DID get is not written down either. CIS 9.x, per profile: log
+    # dropped packets, log successful connections, and a log of at least
+    # 16384 KB - the shipped 4096 KB is minutes of a scan. Read effective
+    # from Get-NetFirewallProfile (GpoBoolean: True/False/NotConfigured, so
+    # compared as text), set per profile only where something differs.
+    foreach ($profileName in @('Domain', 'Private', 'Public')) {
+        $fw = Get-NetFirewallProfile -Name $profileName
+        $needs = @()
+        if ("$($fw.LogBlocked)" -ne 'True') { $needs += 'dropped packets' }
+        if ("$($fw.LogAllowed)" -ne 'True') { $needs += 'successful connections' }
+        if ([int]$fw.LogMaxSizeKilobytes -lt 16384) { $needs += "size $($fw.LogMaxSizeKilobytes) KB -> 16384 KB" }
+        if ($needs.Count -eq 0) {
+            Write-Ok "$profileName profile already logs dropped and allowed into $($fw.LogMaxSizeKilobytes) KB"
+            continue
+        }
+        if ($DryRun) {
+            Write-Warn2 "(dry-run) would fix $profileName logging: $($needs -join ', ') (currently dropped=$($fw.LogBlocked) allowed=$($fw.LogAllowed) size=$($fw.LogMaxSizeKilobytes) KB)"
+            continue
+        }
+        Set-NetFirewallProfile -Name $profileName -LogBlocked True -LogAllowed True -LogMaxSizeKilobytes 16384
+        $Script:ChangeCount++
+        Write-Warn2 "$profileName profile now logs dropped and allowed into a 16 MB log, was dropped=$($fw.LogBlocked) allowed=$($fw.LogAllowed) size=$($fw.LogMaxSizeKilobytes) KB"
+    }
+    Write-Ok 'A scan or a brute force leaves a line per packet in pfirewall.log - and so does the connection that got through'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -807,6 +843,7 @@ function Invoke-Main {
     if (-not $NoSmb1) { Write-Host '    - SMBv1 off (server dialect, client driver, optional feature)' }
     if (-not $NoScriptHost) { Write-Host '    - Windows Script Host off (no .vbs/.js/.wsf execution)' }
     if (-not $NoEventLogSize) { Write-Host '    - event log capacity: Security 192 MB, System/Application 32 MB (policy + live, never shrinks)' }
+    if (-not $NoFirewallLogging) { Write-Host '    - firewall logging: dropped and allowed connections, 16 MB per profile' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -830,6 +867,7 @@ function Invoke-Main {
     Disable-Smb1
     Disable-ScriptHost
     Set-EventLogCapacity
+    Set-FirewallLogging
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
