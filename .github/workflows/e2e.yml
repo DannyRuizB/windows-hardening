@@ -171,6 +171,8 @@ jobs:
           if ($fwlAfter -ne $fwlBefore) { throw "dry run changed firewall logging: $fwlBefore -> $fwlAfter" }
           $guestAfter = (Get-SmbClientConfiguration).EnableInsecureGuestLogons
           if ($guestAfter -ne $guestBefore) { throw "dry run changed SMB guest logons: $guestBefore -> $guestAfter" }
+          $uncDry = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Name '\\*\SYSVOL' -ErrorAction SilentlyContinue).'\\*\SYSVOL'
+          if ($uncDry) { throw "dry run wrote a Hardened UNC path: $uncDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

@@ -420,6 +420,15 @@ $smbCli = Get-SmbClientConfiguration
 if (-not $smbCli.EnableInsecureGuestLogons) { Pass 'SMB client refuses insecure guest logons (effective config)' }
 else { Fail 'SMB client still accepts insecure guest logons (EnableInsecureGuestLogons=True)' }
 
+Write-Host '== Hardened UNC paths ==' -ForegroundColor White
+# Absent on a stock server (natural offender), so each value flips red-to-green
+# from real work. REG_SZ, exact string.
+foreach ($unc in @('\\*\SYSVOL', '\\*\NETLOGON')) {
+    Test-RegEquals "$unc requires mutual auth + integrity" `
+        'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' `
+        $unc 'RequireMutualAuthentication=1, RequireIntegrity=1'
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
