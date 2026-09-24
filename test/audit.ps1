@@ -309,6 +309,15 @@ $outAud = Get-Reg $msv 'RestrictSendingNTLMTraffic'
 if ($outAud -ge 1) { P "outgoing NTLM audited (RestrictSendingNTLMTraffic=$outAud)" }
 else { F "outgoing NTLM is not audited (RestrictSendingNTLMTraffic=$(if ($null -eq $outAud) { '<absent>' } else { $outAud }))" 'run harden.ps1 (NTLM auditing step)' }
 
+Write-Host '-- NTLM session security -----------------------------------'
+# CIS 2.3.11.9 / 2.3.11.10: 537395200 (0x20080000) = NTLMv2 session security
+# + 128-bit encryption, on both sides. Graded by the two bits, not equality.
+foreach ($name in @('NTLMMinClientSec', 'NTLMMinServerSec')) {
+    $v = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' $name
+    if ($null -ne $v -and (([int]$v -band 0x20080000) -eq 0x20080000)) { P "$name requires NTLMv2 session security + 128-bit" }
+    else { F "$name does not require NTLMv2 session security + 128-bit ($(if ($null -eq $v) { '<absent>' } else { '0x{0:X8}' -f [int]$v }))" 'run harden.ps1 (NTLM session security step)' }
+}
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

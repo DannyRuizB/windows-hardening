@@ -157,6 +157,10 @@ $scenarios = @(
        Plant  = { Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name AuditReceivingNTLMTraffic, RestrictSendingNTLMTraffic -ErrorAction SilentlyContinue }
        Probe  = { $null -eq (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' AuditReceivingNTLMTraffic) }
        Desc   = 'NTLM traffic stays unaudited (no MSV1_0 audit values)' }
+    @{ Switch = 'NoNtlmSessionSecurity'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name NTLMMinServerSec -Value 536870912 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' NTLMMinServerSec) -eq 536870912 }
+       Desc   = 'the NTLM server keeps accepting sessions without NTLMv2 session security' }
 )
 
 Write-Host ''

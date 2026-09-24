@@ -464,6 +464,22 @@ else { Fail 'the NTLM probe did not land in event 8001 with its supplied user' }
 if ($seen -contains 8002) { Pass 'the incoming side of the same exchange lands in event 8002' }
 else { Fail 'no incoming NTLM audit (8002) for the loopback probe' }
 
+Write-Host '== NTLM session security ==' -ForegroundColor White
+# Bitmasks: both required bits must be SET; other bits are the admin's. The
+# registry is the mechanism (the NTLM SSP reads it per negotiation). No probe
+# of its own: this runner has no peer that offers weaker session security.
+# What IS proven behaviourally is that the stricter floor did not break NTLM:
+# the loopback probe of the NTLM auditing section above still authenticates
+# far enough to be audited on a box that already carries this floor.
+foreach ($name in @('NTLMMinClientSec', 'NTLMMinServerSec')) {
+    $v = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name $name -ErrorAction SilentlyContinue).$name
+    if ($null -ne $v -and (([int]$v -band 0x20080000) -eq 0x20080000)) {
+        Pass ("$name requires NTLMv2 session security + 128-bit (0x{0:X8})" -f [int]$v)
+    } else {
+        Fail "$name lacks NTLMv2 session security and/or 128-bit (got $(if ($null -eq $v) { '<absent>' } else { '0x{0:X8}' -f [int]$v }))"
+    }
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
