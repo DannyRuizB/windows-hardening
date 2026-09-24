@@ -84,6 +84,10 @@
      20. NTLM auditing: incoming and outgoing NTLM logged to the NTLM
          Operational log (audit only, never a block) - the inventory that
          has to exist before NTLM can be turned off.
+     21. NTLM session security floor: NTLMMinClientSec/NTLMMinServerSec
+         require NTLMv2 session security AND 128-bit encryption (the bits
+         are OR-ed in, never removed), so an NTLM session that does happen
+         cannot be negotiated down to the weaker session keys.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -124,6 +128,7 @@ param(
     [switch]$NoSmbGuest,
     [switch]$NoHardenedUnc,
     [switch]$NoNtlmAudit,
+    [switch]$NoNtlmSessionSecurity,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -917,6 +922,32 @@ function Enable-NtlmAuditing {
     Write-Ok 'Every NTLM exchange in or out now names its process, server and account - the inventory before any NTLM ban'
 }
 
+# ---- Step 21: NTLM session security floor ---------------------------------
+
+function Set-NtlmSessionSecurity {
+    if ($NoNtlmSessionSecurity) { Write-Skip 'Skipping NTLM session security floor'; return }
+    Write-Step 'Requiring NTLMv2 session security + 128-bit on NTLM sessions (CIS 2.3.11.9 / 2.3.11.10)'
+    # Step 4 decides which NTLM RESPONSE is accepted (v2 only); these two
+    # values decide what the SESSION that follows must offer - the keys that
+    # sign and seal it. They are bitmasks for the NTLM SSP, client and server
+    # side: 0x00080000 = require NTLMv2 session security, 0x20000000 =
+    # require 128-bit encryption. CIS wants both (537395200 = 0x20080000).
+    # Measured on a Windows 11 box: both ship at 0x20000000 - 128-bit is
+    # there, the NTLMv2 session requirement is not, so a peer can still
+    # settle for the older session-key derivation. The bits are OR-ed into
+    # whatever is there: this step raises a floor and never clears a bit an
+    # admin set on purpose.
+    $msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+    $need = 0x20080000
+    foreach ($name in @('NTLMMinClientSec', 'NTLMMinServerSec')) {
+        $cur = (Get-ItemProperty -LiteralPath $msv -Name $name -ErrorAction SilentlyContinue).$name
+        $want = if ($null -eq $cur) { $need } else { [int]$cur -bor $need }
+        Set-RegistryValue -Path $msv -Name $name -Value $want `
+            -Because 'NTLMv2 session security + 128-bit required (bits OR-ed in)' | Out-Null
+    }
+    Write-Ok 'An NTLM session cannot be negotiated below NTLMv2 session security with 128-bit keys'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -946,6 +977,7 @@ function Invoke-Main {
     if (-not $NoSmbGuest) { Write-Host '    - SMB client: insecure guest logons refused (policy + live)' }
     if (-not $NoHardenedUnc) { Write-Host '    - Hardened UNC paths: SYSVOL/NETLOGON require mutual auth + integrity' }
     if (-not $NoNtlmAudit) { Write-Host '    - NTLM auditing: incoming and outgoing NTLM logged (audit only, never blocks)' }
+    if (-not $NoNtlmSessionSecurity) { Write-Host '    - NTLM session security: NTLMv2 session + 128-bit required, client and server' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -973,6 +1005,7 @@ function Invoke-Main {
     Disable-SmbGuestLogons
     Set-HardenedUncPaths
     Enable-NtlmAuditing
+    Set-NtlmSessionSecurity
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

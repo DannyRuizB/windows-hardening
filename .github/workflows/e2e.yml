@@ -28,6 +28,7 @@ jobs:
           "SMB client EnableInsecureGuestLogons as shipped: $((Get-SmbClientConfiguration).EnableInsecureGuestLogons)"
           $msv = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
           "NTLM audit as shipped: AuditReceivingNTLMTraffic=$($msv.PSObject.Properties['AuditReceivingNTLMTraffic'].Value) RestrictSendingNTLMTraffic=$($msv.PSObject.Properties['RestrictSendingNTLMTraffic'].Value) (empty = absent)"
+          foreach ($n in 'NTLMMinClientSec','NTLMMinServerSec') { $v = $msv.PSObject.Properties[$n].Value; "NTLM session security as shipped: $n=$(if ($null -eq $v) { '<absent>' } else { '0x{0:X8}' -f [int]$v })" }
           Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction) logdropped=$($_.LogBlocked) logallowed=$($_.LogAllowed) logsize=$($_.LogMaxSizeKilobytes)KB" }
           (net accounts) | Select-String 'Minimum password length|history'
           $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
@@ -70,6 +71,13 @@ jobs:
           # (the tautology trap again) and let the step do the work.
           Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force
           "planted SMB client EnableInsecureGuestLogons=$((Get-SmbClientConfiguration).EnableInsecureGuestLogons)"
+          # Step 21 offender: the Windows default 0x20000000 (128-bit only, NO NTLMv2
+          # session security) on both sides, whatever the image ships - so the
+          # step provably ORs the missing bit in instead of confirming a default.
+          foreach ($n in 'NTLMMinClientSec','NTLMMinServerSec') {
+            New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name $n -Value 536870912 -PropertyType DWord -Force | Out-Null
+          }
+          "planted NTLMMinClientSec/NTLMMinServerSec = 0x20000000 (128-bit only)"
           # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
           # minimum. The Security channel will NOT go below 20 MB (measured on
           # this runner: the 1 MB request returns quietly and the effective size
@@ -177,6 +185,8 @@ jobs:
           if ($uncDry) { throw "dry run wrote a Hardened UNC path: $uncDry" }
           $ntlmDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name AuditReceivingNTLMTraffic -ErrorAction SilentlyContinue).AuditReceivingNTLMTraffic
           if ($null -ne $ntlmDry) { throw "dry run wrote the NTLM audit value: $ntlmDry" }
+          $minDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name NTLMMinServerSec).NTLMMinServerSec
+          if ($minDry -ne 536870912) { throw "dry run changed NTLMMinServerSec to $minDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
