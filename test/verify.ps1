@@ -6,8 +6,8 @@
 .DESCRIPTION
     Reads the EFFECTIVE state (what the cmdlets and the OS report) rather
     than the files the script wrote - asking sshd -T instead of trusting
-    sshd_config, in the Linux siblings' idiom. Four checks go further and
-    prove behaviour:
+    sshd_config, in the Linux siblings' idiom. Some checks go further and
+    prove behaviour; the ones that need a probe of their own:
 
       * script-block logging: run a unique string through a FRESH PowerShell
         process and find it in event 4104. The engine reads the policy at
@@ -24,6 +24,9 @@
       * logon auditing: one deliberately failed network logon against this
         very box (a unique nonexistent user, IPC$ on loopback) must land in
         Security event 4625.
+      * NTLM auditing: an NTLM logon against this box with a unique
+        supplied user must land in the NTLM Operational log (8001 with the
+        user, and the incoming 8002).
 
     Exit code 0 = every check passed.
 
@@ -428,6 +431,38 @@ foreach ($unc in @('\\*\SYSVOL', '\\*\NETLOGON')) {
         'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' `
         $unc 'RequireMutualAuthentication=1, RequireIntegrity=1'
 }
+
+Write-Host '== NTLM auditing ==' -ForegroundColor White
+# MSV1_0 values ARE the mechanism (LSA reads them live), so the registry is
+# the effective read; the probe below proves they bite. Absent on a stock
+# server (natural offender).
+$msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+Test-RegEquals 'incoming NTLM is audited for all accounts' $msv 'AuditReceivingNTLMTraffic' 2
+Test-RegEquals 'outgoing NTLM is audited (audit, not deny)' $msv 'RestrictSendingNTLMTraffic' 1
+
+# Behavioural: one NTLM exchange against this very box (a unique nonexistent
+# user, IPC$ on loopback - an IP target rules Kerberos out, so SPNEGO falls
+# back to NTLM) must land in the NTLM Operational log. The outgoing audit
+# (8001) records the SUPPLIED user, so the marker ties the event to this
+# probe; the incoming side (8002) is reported for the record.
+$ntlmProbe = 'whNtlm' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+$ntlmStart = (Get-Date).AddSeconds(-2)
+$null = net use '\\127.0.0.1\IPC$' WrongPass123x /user:$ntlmProbe 2>&1
+$outFound = $false
+$seen = @()
+foreach ($attempt in 1..10) {
+    Start-Sleep -Milliseconds 700
+    $evts = @(Get-WinEvent -FilterHashtable @{
+        LogName = 'Microsoft-Windows-NTLM/Operational'; StartTime = $ntlmStart
+    } -MaxEvents 200 -ErrorAction SilentlyContinue)
+    $seen = @($evts | ForEach-Object { $_.Id } | Sort-Object -Unique)
+    if ($evts | Where-Object { $_.Id -eq 8001 -and $_.Message -like "*$ntlmProbe*" }) { $outFound = $true; break }
+}
+Write-Host "        NTLM Operational events seen since the probe: $(if ($seen) { $seen -join ',' } else { 'none' })"
+if ($outFound) { Pass 'an outgoing NTLM logon really lands in event 8001 (the probe user was recorded)' }
+else { Fail 'the NTLM probe did not land in event 8001 with its supplied user' }
+if ($seen -contains 8002) { Pass 'the incoming side of the same exchange lands in event 8002' }
+else { Fail 'no incoming NTLM audit (8002) for the loopback probe' }
 
 Write-Host ''
 if ($Script:Failures -gt 0) {

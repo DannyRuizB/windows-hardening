@@ -26,6 +26,8 @@ jobs:
           "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
           "SMB RequireSecuritySignature: $((Get-SmbServerConfiguration).RequireSecuritySignature)"
           "SMB client EnableInsecureGuestLogons as shipped: $((Get-SmbClientConfiguration).EnableInsecureGuestLogons)"
+          $msv = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+          "NTLM audit as shipped: AuditReceivingNTLMTraffic=$($msv.PSObject.Properties['AuditReceivingNTLMTraffic'].Value) RestrictSendingNTLMTraffic=$($msv.PSObject.Properties['RestrictSendingNTLMTraffic'].Value) (empty = absent)"
           Get-NetFirewallProfile | ForEach-Object { "firewall $($_.Name): inbound=$($_.DefaultInboundAction) logdropped=$($_.LogBlocked) logallowed=$($_.LogAllowed) logsize=$($_.LogMaxSizeKilobytes)KB" }
           (net accounts) | Select-String 'Minimum password length|history'
           $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
@@ -173,6 +175,8 @@ jobs:
           if ($guestAfter -ne $guestBefore) { throw "dry run changed SMB guest logons: $guestBefore -> $guestAfter" }
           $uncDry = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Name '\\*\SYSVOL' -ErrorAction SilentlyContinue).'\\*\SYSVOL'
           if ($uncDry) { throw "dry run wrote a Hardened UNC path: $uncDry" }
+          $ntlmDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name AuditReceivingNTLMTraffic -ErrorAction SilentlyContinue).AuditReceivingNTLMTraffic
+          if ($null -ne $ntlmDry) { throw "dry run wrote the NTLM audit value: $ntlmDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

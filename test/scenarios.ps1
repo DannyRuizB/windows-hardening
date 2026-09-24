@@ -153,6 +153,10 @@ $scenarios = @(
        Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Recurse -Force -ErrorAction SilentlyContinue }
        Probe  = { -not (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths' -Name '\\*\SYSVOL' -ErrorAction SilentlyContinue) }
        Desc   = 'SYSVOL/NETLOGON stay unhardened (no HardenedPaths values)' }
+    @{ Switch = 'NoNtlmAudit'
+       Plant  = { Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name AuditReceivingNTLMTraffic, RestrictSendingNTLMTraffic -ErrorAction SilentlyContinue }
+       Probe  = { $null -eq (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' AuditReceivingNTLMTraffic) }
+       Desc   = 'NTLM traffic stays unaudited (no MSV1_0 audit values)' }
 )
 
 Write-Host ''
