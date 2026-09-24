@@ -72,6 +72,18 @@
          than any macro. Machine-wide Enabled=0 under Windows Script
          Host\Settings; a server has no business running scripts from
          a mail client, and admin automation lives in PowerShell.
+     16. Event log capacity: Security 192 MB, System/Application 32 MB
+         (policy + live, never shrinks), so a password spray does not wrap
+         the log over the evidence in minutes.
+     17. Firewall logging: dropped AND allowed connections, 16 MB per
+         profile - a firewall that denies in silence hides the scan.
+     18. SMB client insecure guest logons off (policy pin + live): no share
+         mounts without a credential being challenged.
+     19. Hardened UNC paths: SYSVOL/NETLOGON require mutual authentication
+         and integrity, so a spoofed file server cannot feed this client.
+     20. NTLM auditing: incoming and outgoing NTLM logged to the NTLM
+         Operational log (audit only, never a block) - the inventory that
+         has to exist before NTLM can be turned off.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -111,6 +123,7 @@ param(
     [switch]$NoFirewallLogging,
     [switch]$NoSmbGuest,
     [switch]$NoHardenedUnc,
+    [switch]$NoNtlmAudit,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -880,6 +893,30 @@ function Set-HardenedUncPaths {
     Write-Ok 'A spoofed file server cannot feed this client a logon script or share over UNC'
 }
 
+# ---- Step 20: NTLM auditing -------------------------------------------------
+
+function Enable-NtlmAuditing {
+    if ($NoNtlmAudit) { Write-Skip 'Skipping NTLM auditing'; return }
+    Write-Step 'Auditing NTLM traffic in and out (CIS 2.3.11.11 / 2.3.11.13)'
+    # Step 4 refused LM and NTLMv1; NTLMv2 is still NTLM - the protocol that
+    # relays (the SMB-signing story of step 1) and that pass-the-hash rides.
+    # The way off NTLM is to know who still speaks it, and Windows does not
+    # say by default: both audit values ship ABSENT, so an NTLM logon leaves
+    # no trace of which process, which server, which account. Two values
+    # under MSV1_0, AUDIT ONLY - never a block (a deny here breaks whatever
+    # nobody has inventoried yet, which is the very thing this finds):
+    #   AuditReceivingNTLMTraffic = 2  audit incoming NTLM for all accounts
+    #   RestrictSendingNTLMTraffic = 1 audit outgoing NTLM (2 would DENY)
+    # The events land in Microsoft-Windows-NTLM/Operational (8001 outgoing,
+    # 8002 incoming). LSA reads both values live - no reboot.
+    $msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+    Set-RegistryValue -Path $msv -Name 'AuditReceivingNTLMTraffic' -Value 2 `
+        -Because 'audit incoming NTLM for all accounts' | Out-Null
+    Set-RegistryValue -Path $msv -Name 'RestrictSendingNTLMTraffic' -Value 1 `
+        -Because 'audit outgoing NTLM (1 = audit, 2 would deny)' | Out-Null
+    Write-Ok 'Every NTLM exchange in or out now names its process, server and account - the inventory before any NTLM ban'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -908,6 +945,7 @@ function Invoke-Main {
     if (-not $NoFirewallLogging) { Write-Host '    - firewall logging: dropped and allowed connections, 16 MB per profile' }
     if (-not $NoSmbGuest) { Write-Host '    - SMB client: insecure guest logons refused (policy + live)' }
     if (-not $NoHardenedUnc) { Write-Host '    - Hardened UNC paths: SYSVOL/NETLOGON require mutual auth + integrity' }
+    if (-not $NoNtlmAudit) { Write-Host '    - NTLM auditing: incoming and outgoing NTLM logged (audit only, never blocks)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -934,6 +972,7 @@ function Invoke-Main {
     Set-FirewallLogging
     Disable-SmbGuestLogons
     Set-HardenedUncPaths
+    Enable-NtlmAuditing
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

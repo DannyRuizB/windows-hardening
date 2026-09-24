@@ -297,6 +297,18 @@ foreach ($unc in @('\\*\SYSVOL', '\\*\NETLOGON')) {
     }
 }
 
+Write-Host '-- NTLM auditing -------------------------------------------'
+# CIS 2.3.11.11 / 2.3.11.13: who still speaks NTLM must be written down before
+# NTLM can be turned off. Audit only: a deny (2) on the outgoing side is
+# stricter and still graded PASS, but the baseline never applies it.
+$msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+$inAud = Get-Reg $msv 'AuditReceivingNTLMTraffic'
+if ($inAud -eq 2) { P 'incoming NTLM audited for all accounts' }
+else { F "incoming NTLM is not audited (AuditReceivingNTLMTraffic=$(if ($null -eq $inAud) { '<absent>' } else { $inAud }))" 'run harden.ps1 (NTLM auditing step)' }
+$outAud = Get-Reg $msv 'RestrictSendingNTLMTraffic'
+if ($outAud -ge 1) { P "outgoing NTLM audited (RestrictSendingNTLMTraffic=$outAud)" }
+else { F "outgoing NTLM is not audited (RestrictSendingNTLMTraffic=$(if ($null -eq $outAud) { '<absent>' } else { $outAud }))" 'run harden.ps1 (NTLM auditing step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
