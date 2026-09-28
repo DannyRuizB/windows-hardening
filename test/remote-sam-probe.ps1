@@ -56,7 +56,11 @@ try {
     "ERROR|$($_.Exception.InnerException.Message) $($_.Exception.Message)"
 }
 '@
-    $out = (& powershell.exe -NoProfile -NonInteractive -Command $child 2>&1 | Out-String).Trim()
+    # -EncodedCommand, not -Command: native argument passing strips the
+    # inner double quotes of a multi-line -Command (measured on the runner:
+    # "ALLOWED|$n" arrived as a pipeline and the child did not even parse).
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
+    $out = (& powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | Out-String).Trim()
     if ($out -match '^ALLOWED\|(\d+)') {
         return (New-ProbeResult 'ALLOWED' "a non-admin listed $($Matches[1]) local account(s) over SAMR")
     }
