@@ -51,6 +51,7 @@ run reports **0**.
 | **Hardened UNC paths** | CIS 18.6.14.1. A UNC fetch — a mapped drive, a logon script from `\\server\NETLOGON`, an installer run from a file share — trusts whatever answers the name, and name resolution is spoofable (the LLMNR/NetBIOS story of step 3). An attacker who wins the race serves a malicious `SYSVOL`/`NETLOGON` or share and the client runs it. Hardened UNC paths make the client **refuse** a path unless the server proves its identity (`RequireMutualAuthentication`) and the bytes are integrity-protected (`RequireIntegrity`) — a signed, authenticated channel or nothing. Two `REG_SZ` values under `NetworkProvider\HardenedPaths` cover the domain-critical shares; even standalone the pin is harmless and closes the share-MITM door for good. Absent on a stock server, so the CI plants nothing — verify checks the two values flip from `<absent>` to `RequireMutualAuthentication=1, RequireIntegrity=1`. `-NoHardenedUnc` to skip. |
 | **NTLM auditing** | CIS 2.3.11.11 / 2.3.11.13. Step 4 refused LM and NTLMv1 — but NTLMv2 is still **NTLM**, the protocol that relays (step 1's story) and that pass-the-hash rides. The way off NTLM is knowing **who still speaks it**, and Windows does not say by default: both audit values ship **absent**, so an NTLM logon leaves no trace of which process, which server, which account. Two values under `Lsa\MSV1_0`, **audit only, never a block** — a deny breaks exactly the things nobody has inventoried yet, which is what this step exists to find: `AuditReceivingNTLMTraffic = 2` (incoming, all accounts) and `RestrictSendingNTLMTraffic = 1` (outgoing; `2` would *deny*). Events land in `Microsoft-Windows-NTLM/Operational` (8001 outgoing, 8002 incoming); LSA reads both values live, no reboot. **Behavioural proof**: verify runs one NTLM logon against the box itself (a unique nonexistent user, `IPC$` on loopback — an IP target rules Kerberos out) and the supplied user must show up in event 8001, with the incoming 8002 alongside. `-NoNtlmAudit` to skip. |
 | **NTLM session security floor** | CIS 2.3.11.9 / 2.3.11.10. Step 4 decides which NTLM *response* is accepted; these two values decide what the **session** that follows must offer — the keys that sign and seal it. `NTLMMinClientSec` / `NTLMMinServerSec` are bitmasks for the NTLM SSP: `0x00080000` requires **NTLMv2 session security**, `0x20000000` requires **128-bit** encryption, and CIS wants both (`537395200` = `0x20080000`). Measured on a Windows 11 box AND on the Server 2025 CI runner: both ship at `0x20000000` — 128-bit is there, the NTLMv2 session requirement is not. The bits are **OR-ed in**: the step raises a floor and never clears a bit an admin set on purpose, and verify/audit grade the two bits, not equality. The CI still plants `0x20000000` on both sides, so the change stays real if a future image ships the target. No probe of its own (the runner has no peer offering weaker session security), but step 20's loopback NTLM probe runs on a box that already carries this floor, so it proves the stricter floor did not break NTLM. `-NoNtlmSessionSecurity` to skip. |
+| **Remote SAM restricted to Administrators** | CIS 2.3.10.11. SAMR is the RPC interface that lists a box's local users and groups — and who sits in Administrators; recon tools (SharpHound's local-admin collection, `net user` / `net localgroup` against a remote host) ask it over the network. `RestrictRemoteSAM` is the security descriptor the SAM server checks on every remote call, pinned to `O:BAG:BAD:(A;;RC;;;BA)`: Administrators and nobody else. Since Windows 10 1607 / Server 2016 an **absent** value already means that, so on a stock box this writes the default down (the audit grades *absent* as WARN, a custom descriptor as FAIL); where an old GPO or a tool install widened it, it is a real narrowing. **Behavioural proof**: a throwaway non-admin opens a real network logon (`IPC$` on loopback with its password) and asks SAMR for the local accounts through ADSI — the e2e first plants an Everyone descriptor and requires the probe to **succeed**, so the *Access is denied* that `verify.ps1` then demands is the step's doing. Read live, no reboot. `-NoRemoteSam` for a monitoring account that genuinely needs SAMR reads. |
 
 ### Deliberately *not* in the baseline
 
@@ -90,7 +91,7 @@ The CI does what a reviewer would want to see done:
 5. **Second pass must report `Changes applied: 0`** — the idempotence contract,
    machine-checked.
 6. **`verify.ps1`** asserts the effective state (what the cmdlets and the OS
-   report, not the files we wrote) plus two behavioural checks:
+   report, not the files we wrote) plus behavioural checks, among them:
    - a **fresh** PowerShell process emits a unique marker and it must appear in
      event 4104. The engine reads the logging policy at startup, so an
      in-process check would be a lie;
@@ -104,7 +105,11 @@ The CI does what a reviewer would want to see done:
      match proving both the subcategory and the command-line inclusion;
    - one deliberately failed network logon (a unique nonexistent user
      against `IPC$` on loopback — it *cannot* succeed and nothing leaves the
-     host) must land in event **4625**.
+     host) must land in event **4625**;
+   - a throwaway **non-admin** with a real network logon to the box must be
+     refused by SAMR when it asks for the local accounts — the same probe
+     that, before hardening, must list them against a planted Everyone
+     descriptor.
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -172,7 +177,7 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 21 steps, 79 verify checks (eleven of them behavioural), a scored
+Early but honest: 22 steps, 81 verify checks (twelve of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 

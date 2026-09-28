@@ -480,6 +480,20 @@ foreach ($name in @('NTLMMinClientSec', 'NTLMMinServerSec')) {
     }
 }
 
+Write-Host '== Remote SAM ==' -ForegroundColor White
+Test-RegEquals 'remote SAM calls are restricted to Administrators' `
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RestrictRemoteSAM' 'O:BAG:BAD:(A;;RC;;;BA)'
+# Behavioural: a throwaway NON-admin opens a real network logon to this box
+# and asks SAMR for the local accounts. The e2e measured the same probe
+# ALLOWED against a planted Everyone descriptor before hardening, so a
+# DENIED here is the step's doing, not a probe that cannot succeed. A probe
+# that never got as far as asking is a FAILED proof, never a pass.
+$sam = & (Join-Path $PSScriptRoot 'remote-sam-probe.ps1')
+Write-Host "        remote SAM probe: $($sam.Result) - $($sam.Detail)"
+if ($sam.Result -eq 'DENIED') { Pass 'a non-admin network logon is refused by SAMR (Access is denied)' }
+elseif ($sam.Result -eq 'ALLOWED') { Fail "a non-admin still enumerates SAM remotely: $($sam.Detail)" }
+else { Fail "the remote SAM probe did not run: $($sam.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

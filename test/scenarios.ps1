@@ -161,6 +161,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name NTLMMinServerSec -Value 536870912 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' NTLMMinServerSec) -eq 536870912 }
        Desc   = 'the NTLM server keeps accepting sessions without NTLMv2 session security' }
+    @{ Switch = 'NoRemoteSam'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM -Value 'O:BAG:BAD:(A;;RC;;;WD)' -PropertyType String -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' RestrictRemoteSAM) -eq 'O:BAG:BAD:(A;;RC;;;WD)' }
+       Desc   = 'remote SAM stays open to Everyone (the planted wide descriptor)' }
 )
 
 Write-Host ''

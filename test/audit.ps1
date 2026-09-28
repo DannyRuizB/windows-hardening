@@ -318,6 +318,16 @@ foreach ($name in @('NTLMMinClientSec', 'NTLMMinServerSec')) {
     else { F "$name does not require NTLMv2 session security + 128-bit ($(if ($null -eq $v) { '<absent>' } else { '0x{0:X8}' -f [int]$v }))" 'run harden.ps1 (NTLM session security step)' }
 }
 
+Write-Host '-- Remote SAM ------------------------------------------------'
+# CIS 2.3.10.11. The exact SDDL passes; ABSENT is a WARN, not a FAIL: since
+# Windows 10 1607 / Server 2016 the SAM server then applies the same
+# Administrators-only default, but the benchmark wants it written down. Any
+# other descriptor was widened (or narrowed) by hand: FAIL, with the value.
+$rsam = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RestrictRemoteSAM'
+if ($rsam -eq 'O:BAG:BAD:(A;;RC;;;BA)') { P 'remote SAM calls are restricted to Administrators (RestrictRemoteSAM)' }
+elseif ($null -eq $rsam) { W 'RestrictRemoteSAM is absent (the OS default is Administrators-only since 1607, but not pinned)' 'run harden.ps1 (remote SAM step)' }
+else { F "RestrictRemoteSAM is a custom descriptor: $rsam" 'set it to O:BAG:BAD:(A;;RC;;;BA), or document who needs SAMR reads' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

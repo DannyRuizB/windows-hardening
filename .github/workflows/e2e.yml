@@ -48,6 +48,13 @@ jobs:
           "SMB1 as shipped: server EnableSMB1Protocol=$((Get-SmbServerConfiguration).EnableSMB1Protocol) mrxsmb10=$(if (Get-Service mrxsmb10 -ErrorAction SilentlyContinue) { (Get-Service mrxsmb10).StartType } else { 'absent' }) feature=$((Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State)"
           Get-Service Spooler, RemoteRegistry -ErrorAction SilentlyContinue |
             ForEach-Object { "service $($_.Name): $($_.Status)/$($_.StartType)" }
+          $rsam = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM -ErrorAction SilentlyContinue).RestrictRemoteSAM
+          "RestrictRemoteSAM as shipped: $(if ($null -eq $rsam) { '<absent>' } else { $rsam })"
+          # Measured, not assumed: what does ABSENT mean on this image? (The
+          # claim is "Administrators only since 1607" - the probe says.)
+          $shipped = .\test\remote-sam-probe.ps1
+          "remote SAM probe as shipped: $($shipped.Result) - $($shipped.Detail)"
+          $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
       # LLMNR/NetBIOS enabled, no PowerShell logging, password length 0. Two
@@ -78,6 +85,15 @@ jobs:
             New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name $n -Value 536870912 -PropertyType DWord -Force | Out-Null
           }
           "planted NTLMMinClientSec/NTLMMinServerSec = 0x20000000 (128-bit only)"
+          # Step 22 offender: a descriptor widened to Everyone (what an old GPO
+          # or a monitoring-tool install leaves). The SAME probe verify runs
+          # must be ALLOWED here - proof that its later DENIED can fail.
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM `
+            -Value 'O:BAG:BAD:(A;;RC;;;WD)' -PropertyType String -Force | Out-Null
+          $wide = .\test\remote-sam-probe.ps1
+          "planted RestrictRemoteSAM = O:BAG:BAD:(A;;RC;;;WD); probe: $($wide.Result) - $($wide.Detail)"
+          if ($wide.Result -ne 'ALLOWED') { throw "the remote SAM probe cannot succeed even against Everyone ($($wide.Result)) - its DENIED after hardening would prove nothing" }
+          $global:LASTEXITCODE = 0
           # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
           # minimum. The Security channel will NOT go below 20 MB (measured on
           # this runner: the 1 MB request returns quietly and the effective size
@@ -187,6 +203,8 @@ jobs:
           if ($null -ne $ntlmDry) { throw "dry run wrote the NTLM audit value: $ntlmDry" }
           $minDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name NTLMMinServerSec).NTLMMinServerSec
           if ($minDry -ne 536870912) { throw "dry run changed NTLMMinServerSec to $minDry" }
+          $rsamDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM).RestrictRemoteSAM
+          if ($rsamDry -ne 'O:BAG:BAD:(A;;RC;;;WD)') { throw "dry run changed RestrictRemoteSAM to $rsamDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
