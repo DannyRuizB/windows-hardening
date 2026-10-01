@@ -494,6 +494,19 @@ if ($sam.Result -eq 'DENIED') { Pass 'a non-admin network logon is refused by SA
 elseif ($sam.Result -eq 'ALLOWED') { Fail "a non-admin still enumerates SAM remotely: $($sam.Detail)" }
 else { Fail "the remote SAM probe did not run: $($sam.Detail)" }
 
+Write-Host '== Blank passwords ==' -ForegroundColor White
+Test-RegEquals 'blank-password accounts are confined to console logon' `
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LimitBlankPasswordUse' 1
+# Behavioural: a throwaway account with NO password opens an SMB session to
+# this box's own IPv4 with an empty one. The e2e measured the same probe
+# ALLOWED against a planted 0 before hardening, so a DENIED here is the
+# step's doing; a probe that never got as far as asking is a FAILED proof.
+$blank = & (Join-Path $PSScriptRoot 'blank-password-probe.ps1')
+Write-Host "        blank-password probe: $($blank.Result) - $($blank.Detail)"
+if ($blank.Result -eq 'DENIED') { Pass 'an empty password is refused over the network (system error 1327, account restrictions)' }
+elseif ($blank.Result -eq 'ALLOWED') { Fail "a blank password still logs on over the network: $($blank.Detail)" }
+else { Fail "the blank-password probe did not run: $($blank.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

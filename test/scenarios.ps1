@@ -165,6 +165,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM -Value 'O:BAG:BAD:(A;;RC;;;WD)' -PropertyType String -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' RestrictRemoteSAM) -eq 'O:BAG:BAD:(A;;RC;;;WD)' }
        Desc   = 'remote SAM stays open to Everyone (the planted wide descriptor)' }
+    @{ Switch = 'NoBlankPasswordLimit'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse -Value 0 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' LimitBlankPasswordUse) -eq 0 }
+       Desc   = 'a blank password stays a network credential (the planted 0)' }
 )
 
 Write-Host ''
