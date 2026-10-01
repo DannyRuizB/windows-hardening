@@ -51,6 +51,12 @@ try {
     } catch {
         return (New-ProbeResult 'SETUP-FAILED' "could not create a blank-password user: $($_.Exception.Message)")
     }
+    # Measured on the runner: a -NoPassword account is born "must change
+    # password at next logon", and that refusal (system error 1907) comes
+    # BEFORE the blank-password one - in both states. Cleared, so the logon
+    # meets the rule under test.
+    $chg = (cmd.exe /c "net user $user /logonpasswordchg:no 2>&1" | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { return (New-ProbeResult 'SETUP-FAILED' "could not clear 'must change password': $chg") }
     $null = cmd.exe /c "net use $target /delete /y" 2>&1
     $out = (cmd.exe /c "net use $target `"`" /user:$env:COMPUTERNAME\$user 2>&1" | Out-String).Trim()
     $rc = $LASTEXITCODE
