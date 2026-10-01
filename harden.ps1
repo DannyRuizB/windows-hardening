@@ -88,6 +88,10 @@
          require NTLMv2 session security AND 128-bit encryption (the bits
          are OR-ed in, never removed), so an NTLM session that does happen
          cannot be negotiated down to the weaker session keys.
+     22. Remote SAM restricted to Administrators: RestrictRemoteSAM pins
+         the SDDL that decides who may query the local account database
+         over the network (SAMR) - the enumeration every AD recon tool
+         (BloodHound's SharpHound, net user /domain on a member) runs.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -129,6 +133,7 @@ param(
     [switch]$NoHardenedUnc,
     [switch]$NoNtlmAudit,
     [switch]$NoNtlmSessionSecurity,
+    [switch]$NoRemoteSam,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -948,6 +953,29 @@ function Set-NtlmSessionSecurity {
     Write-Ok 'An NTLM session cannot be negotiated below NTLMv2 session security with 128-bit keys'
 }
 
+# ---- Step 22: remote SAM restricted to Administrators ---------------------
+
+function Set-RemoteSamRestriction {
+    if ($NoRemoteSam) { Write-Skip 'Skipping the remote SAM restriction'; return }
+    Write-Step 'Restricting remote SAM calls to Administrators (CIS 2.3.10.11)'
+    # SAMR is the RPC interface that lists local users and groups, and who
+    # is in Administrators. Recon tools (SharpHound's session/local-admin
+    # collection, net user / net localgroup against a remote box) ask it
+    # over the network, and an ordinary authenticated user used to get the
+    # answer. RestrictRemoteSAM is the security descriptor the SAM server
+    # checks on every remote call: O:BAG:BAD:(A;;RC;;;BA) lets
+    # Administrators (and nobody else) through. Since Windows 10 1607 /
+    # Server 2016 an ABSENT value already means "Administrators only", so on
+    # a stock box this pins the default in writing (CIS wants it explicit);
+    # where an admin or an old GPO widened it - say to Everyone - it is a
+    # real narrowing. A monitoring account that needs SAMR reads is exactly
+    # the case for -NoRemoteSam. Read by the SAM server live - no reboot.
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictRemoteSAM' `
+        -Value 'O:BAG:BAD:(A;;RC;;;BA)' -Type String `
+        -Because 'only Administrators may query SAM over the network' | Out-Null
+    Write-Ok 'A non-admin on the network can no longer list local accounts or group membership through SAMR'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -978,6 +1006,7 @@ function Invoke-Main {
     if (-not $NoHardenedUnc) { Write-Host '    - Hardened UNC paths: SYSVOL/NETLOGON require mutual auth + integrity' }
     if (-not $NoNtlmAudit) { Write-Host '    - NTLM auditing: incoming and outgoing NTLM logged (audit only, never blocks)' }
     if (-not $NoNtlmSessionSecurity) { Write-Host '    - NTLM session security: NTLMv2 session + 128-bit required, client and server' }
+    if (-not $NoRemoteSam) { Write-Host '    - remote SAM (SAMR) calls restricted to Administrators' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1006,6 +1035,7 @@ function Invoke-Main {
     Set-HardenedUncPaths
     Enable-NtlmAuditing
     Set-NtlmSessionSecurity
+    Set-RemoteSamRestriction
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
