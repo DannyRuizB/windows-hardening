@@ -328,6 +328,14 @@ if ($rsam -eq 'O:BAG:BAD:(A;;RC;;;BA)') { P 'remote SAM calls are restricted to 
 elseif ($null -eq $rsam) { W 'RestrictRemoteSAM is absent (the OS default is Administrators-only since 1607, but not pinned)' 'run harden.ps1 (remote SAM step)' }
 else { F "RestrictRemoteSAM is a custom descriptor: $rsam" 'set it to O:BAG:BAD:(A;;RC;;;BA), or document who needs SAMR reads' }
 
+Write-Host '-- Blank passwords -------------------------------------------'
+# CIS 2.3.1.4. Windows ships 1, so ABSENT is what a stock box looks like and
+# is graded on what LSA then applies (console only): PASS. A 0 is a blank
+# password accepted over SMB, RDP and WinRM: FAIL.
+$lbpu = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LimitBlankPasswordUse'
+if ($null -eq $lbpu -or [int]$lbpu -eq 1) { P "blank-password accounts are console-only (LimitBlankPasswordUse = $(if ($null -eq $lbpu) { '<absent>, default 1' } else { $lbpu }))" }
+else { F "a local account with an EMPTY password may log on over the network (LimitBlankPasswordUse = $lbpu)" 'run harden.ps1 (blank password step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

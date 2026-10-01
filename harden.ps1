@@ -92,6 +92,10 @@
          the SDDL that decides who may query the local account database
          over the network (SAMR) - the enumeration every AD recon tool
          (BloodHound's SharpHound, net user /domain on a member) runs.
+     23. Blank passwords stay at the console: LimitBlankPasswordUse = 1, so
+         a local account whose password is EMPTY cannot log on over the
+         network (SMB, RDP, WinRM) - only at the keyboard. The Windows twin
+         of the Linux siblings' PAM nullok step.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -134,6 +138,7 @@ param(
     [switch]$NoNtlmAudit,
     [switch]$NoNtlmSessionSecurity,
     [switch]$NoRemoteSam,
+    [switch]$NoBlankPasswordLimit,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -976,6 +981,27 @@ function Set-RemoteSamRestriction {
     Write-Ok 'A non-admin on the network can no longer list local accounts or group membership through SAMR'
 }
 
+# ---- Step 23: blank passwords confined to the console ---------------------
+
+function Set-BlankPasswordLimit {
+    if ($NoBlankPasswordLimit) { Write-Skip 'Skipping the blank-password network logon limit'; return }
+    Write-Step 'Confining blank-password accounts to console logon (CIS 2.3.1.4)'
+    # A local account can exist with NO password: New-LocalUser -NoPassword,
+    # `net user x /passwordreq:no`, a vendor's service or kiosk account - the
+    # "password not required" flag lets it past any length policy. With
+    # LimitBlankPasswordUse = 1 such an account may only log on at the
+    # console; over the network (an SMB session, RDP, WinRM) its empty
+    # password is refused with "account restrictions" (system error 1327).
+    # With 0, anyone who can reach the box and knows the name is in, no
+    # credential at all - the Windows face of the Linux twins' PAM nullok
+    # step. 1 is what Windows ships, which is exactly why a 0 goes unnoticed
+    # once an installer or an old "make the scanner account work" fix has
+    # written it. LSA reads it live - no reboot.
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LimitBlankPasswordUse' `
+        -Value 1 -Because 'a blank password is a console-only credential, never a network one' | Out-Null
+    Write-Ok 'A local account with an empty password can no longer log on over the network'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1007,6 +1033,7 @@ function Invoke-Main {
     if (-not $NoNtlmAudit) { Write-Host '    - NTLM auditing: incoming and outgoing NTLM logged (audit only, never blocks)' }
     if (-not $NoNtlmSessionSecurity) { Write-Host '    - NTLM session security: NTLMv2 session + 128-bit required, client and server' }
     if (-not $NoRemoteSam) { Write-Host '    - remote SAM (SAMR) calls restricted to Administrators' }
+    if (-not $NoBlankPasswordLimit) { Write-Host '    - blank-password accounts confined to console logon' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1036,6 +1063,7 @@ function Invoke-Main {
     Enable-NtlmAuditing
     Set-NtlmSessionSecurity
     Set-RemoteSamRestriction
+    Set-BlankPasswordLimit
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

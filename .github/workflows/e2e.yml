@@ -54,6 +54,10 @@ jobs:
           # claim is "Administrators only since 1607" - the probe says.)
           $shipped = .\test\remote-sam-probe.ps1
           "remote SAM probe as shipped: $($shipped.Result) - $($shipped.Detail)"
+          $lbpu = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse -ErrorAction SilentlyContinue).LimitBlankPasswordUse
+          "LimitBlankPasswordUse as shipped: $(if ($null -eq $lbpu) { '<absent>' } else { $lbpu })"
+          $blank = .\test\blank-password-probe.ps1
+          "blank-password network logon as shipped: $($blank.Result) - $($blank.Detail)"
           $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
@@ -93,6 +97,15 @@ jobs:
           $wide = .\test\remote-sam-probe.ps1
           "planted RestrictRemoteSAM = O:BAG:BAD:(A;;RC;;;WD); probe: $($wide.Result) - $($wide.Detail)"
           if ($wide.Result -ne 'ALLOWED') { throw "the remote SAM probe cannot succeed even against Everyone ($($wide.Result)) - its DENIED after hardening would prove nothing" }
+          # Step 23 offender: Windows ships LimitBlankPasswordUse = 1, so the 0
+          # an installer or an old "make the scanner account work" fix leaves
+          # is planted - and the SAME probe verify runs must get IN with a
+          # blank password here, or its later DENIED would prove nothing.
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse `
+            -Value 0 -PropertyType DWord -Force | Out-Null
+          $open = .\test\blank-password-probe.ps1
+          "planted LimitBlankPasswordUse = 0; probe: $($open.Result) - $($open.Detail)"
+          if ($open.Result -ne 'ALLOWED') { throw "a blank password cannot log on even with LimitBlankPasswordUse = 0 ($($open.Result)) - its DENIED after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
           # Step 16 offenders: System and Application shrunk to wevtutil's 1 MB
           # minimum. The Security channel will NOT go below 20 MB (measured on
@@ -205,6 +218,8 @@ jobs:
           if ($minDry -ne 536870912) { throw "dry run changed NTLMMinServerSec to $minDry" }
           $rsamDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RestrictRemoteSAM).RestrictRemoteSAM
           if ($rsamDry -ne 'O:BAG:BAD:(A;;RC;;;WD)') { throw "dry run changed RestrictRemoteSAM to $rsamDry" }
+          $lbpuDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse).LimitBlankPasswordUse
+          if ($lbpuDry -ne 0) { throw "dry run changed LimitBlankPasswordUse to $lbpuDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
