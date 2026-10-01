@@ -10,11 +10,16 @@
     the "access this computer from the network" right a remote caller
     uses, and a token that still carries the password for the outbound
     hop - and, IMPERSONATING that token, asks SAMR for the local users with
-    NetUserEnum against two network addresses of this very box: the
-    loopback (\\127.0.0.1) and the first non-loopback IPv4. Neither is the
+    NetUserEnum against this box's first non-loopback IPv4. That is not the
     computer name, so netapi does not short-circuit to a local call; it
     binds \pipe\samr over SMB as the probe user - the path a remote caller
     takes, and the one RestrictRemoteSAM gates.
+
+    NOT the loopback: measured on the runner, NetUserEnum against
+    \\127.0.0.1 lists the accounts (rc 0) as shipped, against the planted
+    Everyone descriptor AND after hardening - SAM does not treat it as
+    remote. The box's own IPv4 answered rc 5 as shipped, rc 0 against
+    Everyone and rc 5 after hardening: a probe that tells them apart.
 
     The child also reports whose token it called with; anything but the
     probe user is a FAILED probe. (That was the first version's flaw: the
@@ -22,10 +27,10 @@
     the descriptor said. Start-Process -Credential was the second try: on
     the runner it fails with "The parameter is incorrect".)
 
-    Returns one object: Result = ALLOWED (some target listed the accounts),
-    DENIED (every target refused: rc 5, access denied), or SETUP-FAILED
+    Returns one object: Result = ALLOWED (the accounts were listed),
+    DENIED (rc 5, access denied), or SETUP-FAILED
     (the probe never got as far as asking - a FAILED proof, never a pass).
-    Detail always lists every target's answer. The user is removed
+    Detail always carries the raw answer. The user is removed
     whatever happens.
 
 .NOTES
@@ -45,11 +50,11 @@ function New-ProbeResult {
     [pscustomobject]@{ Result = $Result; Detail = $Detail }
 }
 
-$targets = @('\\127.0.0.1')
 $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
     Select-Object -First 1 -ExpandProperty IPAddress
-if ($ip) { $targets += "\\$ip" }
+if (-not $ip) { return (New-ProbeResult 'SETUP-FAILED' 'no non-loopback IPv4 to call SAMR on (the loopback does not count as remote)') }
+$targets = @("\\$ip")
 
 try {
     $addOut = (net user $user $pw /add /y 2>&1 | Out-String).Trim()
