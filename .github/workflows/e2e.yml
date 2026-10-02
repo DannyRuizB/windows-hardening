@@ -58,6 +58,14 @@ jobs:
           "LimitBlankPasswordUse as shipped: $(if ($null -eq $lbpu) { '<absent>' } else { $lbpu })"
           $blank = .\test\blank-password-probe.ps1
           "blank-password network logon as shipped: $($blank.Result) - $($blank.Detail)"
+          # Step 24: measured, the image ships DisableDomainCreds = 0 - the box
+          # as it comes IS the offender, and the probe verify runs must get a
+          # network password saved here, or its later DENIED would prove nothing.
+          $ddc = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -ErrorAction SilentlyContinue).DisableDomainCreds
+          "DisableDomainCreds as shipped: $(if ($null -eq $ddc) { '<absent>' } else { $ddc })"
+          $dcShipped = .\test\domain-creds-probe.ps1
+          "saved-credentials probe as shipped: $($dcShipped.Result) - $($dcShipped.Detail)"
+          if ($dcShipped.Result -ne 'ALLOWED') { throw "a network password cannot be saved even as shipped ($($dcShipped.Result)) - the DENIED after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
@@ -220,6 +228,8 @@ jobs:
           if ($rsamDry -ne 'O:BAG:BAD:(A;;RC;;;WD)') { throw "dry run changed RestrictRemoteSAM to $rsamDry" }
           $lbpuDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse).LimitBlankPasswordUse
           if ($lbpuDry -ne 0) { throw "dry run changed LimitBlankPasswordUse to $lbpuDry" }
+          $ddcDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -ErrorAction SilentlyContinue).DisableDomainCreds
+          if ($ddcDry -eq 1) { throw "dry run set DisableDomainCreds" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

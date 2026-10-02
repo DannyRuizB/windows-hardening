@@ -169,6 +169,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse -Value 0 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' LimitBlankPasswordUse) -eq 0 }
        Desc   = 'a blank password stays a network credential (the planted 0)' }
+    @{ Switch = 'NoDomainCreds'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -Value 0 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' DisableDomainCreds) -eq 0 }
+       Desc   = 'network passwords can still be saved in Credential Manager (the planted 0)' }
 )
 
 Write-Host ''

@@ -96,6 +96,12 @@
          a local account whose password is EMPTY cannot log on over the
          network (SMB, RDP, WinRM) - only at the keyboard. The Windows twin
          of the Linux siblings' PAM nullok step.
+     24. No saved network passwords: DisableDomainCreds = 1, so Credential
+         Manager refuses to store a password for network authentication
+         (cmdkey /add, "Remember my credentials") - the stash mimikatz
+         vault::cred lifts. Live, no reboot. Credentials already saved are
+         HIDDEN, not deleted (measured): the step names how many the
+         running account has, to be removed with cmdkey /delete.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -139,6 +145,7 @@ param(
     [switch]$NoNtlmSessionSecurity,
     [switch]$NoRemoteSam,
     [switch]$NoBlankPasswordLimit,
+    [switch]$NoDomainCreds,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -1002,6 +1009,37 @@ function Set-BlankPasswordLimit {
     Write-Ok 'A local account with an empty password can no longer log on over the network'
 }
 
+# ---- Step 24: no saved passwords for network authentication -------------
+
+function Disable-DomainCredentialStorage {
+    if ($NoDomainCreds) { Write-Skip 'Skipping the saved network credentials block'; return }
+    Write-Step 'Refusing to save passwords for network authentication (CIS 2.3.10.4)'
+    # "Remember my credentials" on an RDP or a mapped-drive prompt, or
+    # `cmdkey /add`, stores a Domain Password credential in Credential
+    # Manager: Windows then hands it to every network logon to that target
+    # without asking - and so it is also what mimikatz vault::cred /
+    # sekurlsa::credman lift from the session. DisableDomainCreds = 1 stops
+    # the saving. Measured on Server 2025, which ships an explicit 0: with
+    # 1, live (no reboot, no new logon), cmdkey /add exits 1 with
+    # "Credentials cannot be saved from this logon session"; GENERIC
+    # credentials (cmdkey /generic, what apps keep tokens in) are untouched.
+    # Credentials saved BEFORE are hidden, not deleted: they vanish from
+    # cmdkey /list while the policy is on and come back, intact, if it goes
+    # back to 0 - so they are counted here first (only the running account's
+    # vault is visible) and named, to be removed with cmdkey /delete.
+    $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+    $current = (Get-ItemProperty -Path $lsa -Name 'DisableDomainCreds' -ErrorAction SilentlyContinue).DisableDomainCreds
+    if ($current -ne 1) {
+        $saved = @(cmd.exe /c 'cmdkey /list 2>&1' | Select-String -SimpleMatch 'Domain Password').Count
+        if ($saved -gt 0) {
+            Write-Warn2 "$saved saved network credential(s) in this account's vault will be HIDDEN, not deleted - list them with cmdkey /list BEFORE this step and remove them with cmdkey /delete:<target>"
+        }
+    }
+    Set-RegistryValue -Path $lsa -Name 'DisableDomainCreds' `
+        -Value 1 -Because 'a network password saved in Credential Manager is a password anyone in the session can take' | Out-Null
+    Write-Ok 'Credential Manager no longer stores passwords for network authentication'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1034,6 +1072,7 @@ function Invoke-Main {
     if (-not $NoNtlmSessionSecurity) { Write-Host '    - NTLM session security: NTLMv2 session + 128-bit required, client and server' }
     if (-not $NoRemoteSam) { Write-Host '    - remote SAM (SAMR) calls restricted to Administrators' }
     if (-not $NoBlankPasswordLimit) { Write-Host '    - blank-password accounts confined to console logon' }
+    if (-not $NoDomainCreds) { Write-Host '    - no saved passwords for network authentication (DisableDomainCreds)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1064,6 +1103,7 @@ function Invoke-Main {
     Set-NtlmSessionSecurity
     Set-RemoteSamRestriction
     Set-BlankPasswordLimit
+    Disable-DomainCredentialStorage
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

@@ -507,6 +507,18 @@ if ($blank.Result -eq 'DENIED') { Pass 'an empty password is refused over the ne
 elseif ($blank.Result -eq 'ALLOWED') { Fail "a blank password still logs on over the network: $($blank.Detail)" }
 else { Fail "the blank-password probe did not run: $($blank.Detail)" }
 
+Write-Host '== Saved network credentials ==' -ForegroundColor White
+Test-RegEquals 'Credential Manager refuses to store passwords for network authentication' `
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'DisableDomainCreds' 1
+# Behavioural: cmdkey /add of a Domain Password credential, anchored on a
+# generic one that must still save. The e2e measured the same probe ALLOWED
+# on the box as shipped, so a DENIED here is the step's doing.
+$dc = & (Join-Path $PSScriptRoot 'domain-creds-probe.ps1')
+Write-Host "        saved-credentials probe: $($dc.Result) - $($dc.Detail)"
+if ($dc.Result -eq 'DENIED') { Pass 'a network password cannot be saved ("Credentials cannot be saved from this logon session"); generic credentials still can' }
+elseif ($dc.Result -eq 'ALLOWED') { Fail "Credential Manager still stores network passwords: $($dc.Detail)" }
+else { Fail "the saved-credentials probe did not run: $($dc.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

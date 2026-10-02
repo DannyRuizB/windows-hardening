@@ -336,6 +336,14 @@ $lbpu = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LimitBlankPassword
 if ($null -eq $lbpu -or [int]$lbpu -eq 1) { P "blank-password accounts are console-only (LimitBlankPasswordUse = $(if ($null -eq $lbpu) { '<absent>, default 1' } else { $lbpu }))" }
 else { F "a local account with an EMPTY password may log on over the network (LimitBlankPasswordUse = $lbpu)" 'run harden.ps1 (blank password step)' }
 
+Write-Host '-- Saved network credentials ---------------------------------'
+# CIS 2.3.10.4. Server 2025 ships an explicit 0 (measured): Credential
+# Manager stores network passwords for anyone in the session to take. 1 PASS,
+# anything else FAIL.
+$ddc = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'DisableDomainCreds'
+if ($null -ne $ddc -and [int]$ddc -eq 1) { P 'Credential Manager does not store passwords for network authentication (DisableDomainCreds = 1)' }
+else { F "network passwords can be saved in Credential Manager (DisableDomainCreds = $(if ($null -eq $ddc) { '<absent>' } else { $ddc }))" 'run harden.ps1 (saved network credentials step); remove what is saved with cmdkey /delete' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
