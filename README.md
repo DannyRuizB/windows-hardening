@@ -192,14 +192,14 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 24 steps, 85 verify checks (fourteen of them behavioural), a scored
+Early but honest: 25 steps, 88 verify checks (fifteen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 57 PASS, 3 WARN, 0 FAIL  ->  98% compliant
+ Score: 58 PASS, 3 WARN, 0 FAIL  ->  98% compliant
 ```
 
 **Not 100%, on purpose.** The three warnings are the controls this baseline
