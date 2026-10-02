@@ -66,6 +66,13 @@ jobs:
           $dcShipped = .\test\domain-creds-probe.ps1
           "saved-credentials probe as shipped: $($dcShipped.Result) - $($dcShipped.Detail)"
           if ($dcShipped.Result -ne 'ALLOWED') { throw "a network password cannot be saved even as shipped ($($dcShipped.Result)) - the DENIED after hardening would prove nothing" }
+          # Step 25: measured, the server signs but does not encrypt as shipped.
+          # The probe verify runs must see a PLAINTEXT session here, or its
+          # ENCRYPTED after hardening would prove nothing.
+          "SMB EncryptData as shipped: $((Get-SmbServerConfiguration).EncryptData)"
+          $encShipped = .\test\smb-encryption-probe.ps1
+          "SMB encryption probe as shipped: $($encShipped.Result) - $($encShipped.Detail)"
+          if ($encShipped.Result -ne 'PLAINTEXT') { throw "a fresh SMB session is not plaintext even as shipped ($($encShipped.Result)) - the ENCRYPTED after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
@@ -230,6 +237,7 @@ jobs:
           if ($lbpuDry -ne 0) { throw "dry run changed LimitBlankPasswordUse to $lbpuDry" }
           $ddcDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -ErrorAction SilentlyContinue).DisableDomainCreds
           if ($ddcDry -eq 1) { throw "dry run set DisableDomainCreds" }
+          if ((Get-SmbServerConfiguration).EncryptData) { throw "dry run turned SMB encryption on" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

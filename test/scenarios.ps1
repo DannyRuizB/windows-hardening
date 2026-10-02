@@ -173,6 +173,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -Value 0 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' DisableDomainCreds) -eq 0 }
        Desc   = 'network passwords can still be saved in Credential Manager (the planted 0)' }
+    @{ Switch = 'NoSmbEncryption'
+       Plant  = { Set-SmbServerConfiguration -EncryptData $false -Confirm:$false -Force }
+       Probe  = { -not (Get-SmbServerConfiguration).EncryptData }
+       Desc   = 'the SMB server keeps serving sessions unencrypted (the planted EncryptData off)' }
 )
 
 Write-Host ''

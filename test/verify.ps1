@@ -519,6 +519,21 @@ if ($dc.Result -eq 'DENIED') { Pass 'a network password cannot be saved ("Creden
 elseif ($dc.Result -eq 'ALLOWED') { Fail "Credential Manager still stores network passwords: $($dc.Detail)" }
 else { Fail "the saved-credentials probe did not run: $($dc.Detail)" }
 
+Write-Host '== SMB encryption ==' -ForegroundColor White
+$smbCfg = Get-SmbServerConfiguration
+if ($smbCfg.EncryptData) { Pass 'the SMB server encrypts every session (EncryptData)' }
+else { Fail 'the SMB server encrypts every session (EncryptData)' }
+if ($smbCfg.RejectUnencryptedAccess) { Pass 'a client that cannot encrypt is refused, not served in the clear (RejectUnencryptedAccess)' }
+else { Fail 'a client that cannot encrypt is refused, not served in the clear (RejectUnencryptedAccess)' }
+# Behavioural: a FRESH session to this box's own IPv4 (sessions closed first:
+# an old one keeps its old state). The e2e measured the same probe PLAINTEXT
+# on the box as shipped, so ENCRYPTED here is the step's doing.
+$enc = & (Join-Path $PSScriptRoot 'smb-encryption-probe.ps1')
+Write-Host "        SMB encryption probe: $($enc.Result) - $($enc.Detail)"
+if ($enc.Result -eq 'ENCRYPTED') { Pass 'a fresh SMB session travels encrypted' }
+elseif ($enc.Result -eq 'PLAINTEXT') { Fail "a fresh SMB session is not encrypted: $($enc.Detail)" }
+else { Fail "the SMB encryption probe did not run: $($enc.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
