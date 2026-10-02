@@ -344,6 +344,13 @@ $ddc = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'DisableDomainCreds'
 if ($null -ne $ddc -and [int]$ddc -eq 1) { P 'Credential Manager does not store passwords for network authentication (DisableDomainCreds = 1)' }
 else { F "network passwords can be saved in Credential Manager (DisableDomainCreds = $(if ($null -eq $ddc) { '<absent>' } else { $ddc }))" 'run harden.ps1 (saved network credentials step); remove what is saved with cmdkey /delete' }
 
+Write-Host '-- SMB encryption --------------------------------------------'
+# Signing (step 1) is integrity; this is confidentiality. As shipped the
+# server signs but does not encrypt (measured): FAIL until EncryptData.
+$smbEnc = Get-SmbServerConfiguration
+if ($smbEnc.EncryptData -and $smbEnc.RejectUnencryptedAccess) { P 'the SMB server encrypts every session and refuses clients that cannot' }
+else { F "SMB sessions can travel unencrypted (EncryptData = $($smbEnc.EncryptData), RejectUnencryptedAccess = $($smbEnc.RejectUnencryptedAccess))" 'run harden.ps1 (SMB encryption step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

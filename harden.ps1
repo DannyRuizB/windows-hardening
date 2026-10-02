@@ -102,6 +102,12 @@
          vault::cred lifts. Live, no reboot. Credentials already saved are
          HIDDEN, not deleted (measured): the step names how many the
          running account has, to be removed with cmdkey /delete.
+     25. SMB encryption: EncryptData = 1 on the server, so every new SMB
+         session is encrypted end to end (signing alone protects integrity,
+         not confidentiality: file contents still cross the wire readable).
+         Live, measured: a fresh session goes Encrypted=True. Sessions
+         already open stay unencrypted until they reconnect (measured), so
+         the step says how many there are.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -146,6 +152,7 @@ param(
     [switch]$NoRemoteSam,
     [switch]$NoBlankPasswordLimit,
     [switch]$NoDomainCreds,
+    [switch]$NoSmbEncryption,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -1040,6 +1047,38 @@ function Disable-DomainCredentialStorage {
     Write-Ok 'Credential Manager no longer stores passwords for network authentication'
 }
 
+# ---- Step 25: SMB encryption -----------------------------------------------
+
+function Set-SmbEncryption {
+    if ($NoSmbEncryption) { Write-Skip 'Skipping SMB encryption'; return }
+    Write-Step 'Requiring SMB encryption on the server (every new session encrypted)'
+    # Step 1 made SMB sessions SIGNED: tampering is detected, but the file
+    # contents still cross the wire in the clear. EncryptData = $true makes
+    # the server encrypt every session (SMB 3, AES); RejectUnencryptedAccess
+    # (True as shipped) keeps a client that cannot encrypt out instead of
+    # quietly falling back. Measured on the runner (Server 2025), through a
+    # real session to its own IPv4: as shipped EncryptData=False and the
+    # session is Encrypted=False, Signed=True; with EncryptData set live, a
+    # FRESH session is Encrypted=True. A session opened before the change
+    # kept going unencrypted (the client reused it), so open sessions are
+    # counted and named: they pick up encryption when they reconnect.
+    $cfg = Get-SmbServerConfiguration
+    if ($cfg.EncryptData -and $cfg.RejectUnencryptedAccess) {
+        Write-Ok 'SMB server already encrypts every session'
+    } elseif ($DryRun) {
+        Write-Warn2 "(dry-run) would require SMB encryption (currently EncryptData=$($cfg.EncryptData), RejectUnencryptedAccess=$($cfg.RejectUnencryptedAccess))"
+    } else {
+        $open = @(Get-SmbSession -ErrorAction SilentlyContinue).Count
+        Set-SmbServerConfiguration -EncryptData $true -RejectUnencryptedAccess $true -Confirm:$false -Force
+        $Script:ChangeCount++
+        Write-Warn2 "SMB server now encrypts every new session, was EncryptData=$($cfg.EncryptData)"
+        if ($open -gt 0) {
+            Write-Warn2 "$open SMB session(s) already open stay unencrypted until they reconnect"
+        }
+    }
+    Write-Ok 'New SMB sessions travel encrypted, not just signed'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1073,6 +1112,7 @@ function Invoke-Main {
     if (-not $NoRemoteSam) { Write-Host '    - remote SAM (SAMR) calls restricted to Administrators' }
     if (-not $NoBlankPasswordLimit) { Write-Host '    - blank-password accounts confined to console logon' }
     if (-not $NoDomainCreds) { Write-Host '    - no saved passwords for network authentication (DisableDomainCreds)' }
+    if (-not $NoSmbEncryption) { Write-Host '    - SMB encryption required on the server (EncryptData)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1104,6 +1144,7 @@ function Invoke-Main {
     Set-RemoteSamRestriction
     Set-BlankPasswordLimit
     Disable-DomainCredentialStorage
+    Set-SmbEncryption
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
