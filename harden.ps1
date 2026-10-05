@@ -114,6 +114,13 @@
          so an idle console locks itself after 15 minutes at the machine
          level. Measured on the runner: the name is shown (0) and there is no
          inactivity limit (absent) - each does real work.
+     27. LSA protection: RunAsPPL = 1 makes the kernel run LSASS as a
+         Protected Process Light, so a token thief (mimikatz
+         sekurlsa::logonpasswords) can no longer read the credentials it
+         holds, and no unsigned provider can load into it. Measured absent on
+         the runner. Effective at the next boot, and UEFI-locked at value 1
+         (Server 2025 also takes 2 for a reversible enable); the audit treats
+         either as protected.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -160,6 +167,7 @@ param(
     [switch]$NoDomainCreds,
     [switch]$NoSmbEncryption,
     [switch]$NoInteractiveLogon,
+    [switch]$NoLsaProtection,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -1110,6 +1118,37 @@ function Set-InteractiveLogonHardening {
     Write-Ok 'The logon screen names no one, and an idle console locks itself'
 }
 
+# ---- Step 27: LSA protection (RunAsPPL) ------------------------------------
+
+function Set-LsaProtection {
+    if ($NoLsaProtection) { Write-Skip 'Skipping LSA protection'; return }
+    Write-Step 'Protecting LSASS as a PPL so a token thief cannot read it (RunAsPPL)'
+    # LSASS holds every logged-on credential in memory - the exact thing
+    # mimikatz `sekurlsa::logonpasswords` reads out of its process. RunAsPPL = 1
+    # makes the kernel run LSASS as a Protected Process Light: another process,
+    # even one running as SYSTEM/Administrator, can no longer open its memory
+    # (OpenProcess for VM_READ is refused), and an unsigned driver cannot load
+    # into it. Measured on the runner (Server 2025, via a probe branch): the
+    # value is ABSENT, so LSASS runs unprotected and this does real work.
+    #
+    # Two honest caveats, both documented rather than hidden:
+    #   - It takes effect on the NEXT BOOT (the protection is set up as LSASS
+    #     starts), so this writes the policy; it is not live like the SMB or
+    #     WDigest steps. verify.ps1 confirms the registry value, not a running
+    #     PPL (a CI runner never reboots).
+    #   - Value 1 is UEFI-locked where the firmware supports it: once it has
+    #     booted protected, deleting the key does NOT turn it back off (the
+    #     lock lives in a UEFI variable). Server 2025 also accepts 2 = enabled
+    #     WITHOUT the lock, which a reversible rollout may prefer; the audit
+    #     treats either as protected. A custom security-support provider that
+    #     is not signed as a PPL will stop loading - the reason to roll this
+    #     out after checking the box has none.
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' `
+        -Name 'RunAsPPL' -Value 1 -Because 'LSASS runs protected from credential theft' | Out-Null
+    $Script:RebootNeeded += 'LSA protection (RunAsPPL takes effect at the next boot)'
+    Write-Ok 'LSASS is set to run protected (effective after a reboot)'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1145,6 +1184,7 @@ function Invoke-Main {
     if (-not $NoDomainCreds) { Write-Host '    - no saved passwords for network authentication (DisableDomainCreds)' }
     if (-not $NoSmbEncryption) { Write-Host '    - SMB encryption required on the server (EncryptData)' }
     if (-not $NoInteractiveLogon) { Write-Host '    - interactive logon: no last user shown, console auto-locks when idle' }
+    if (-not $NoLsaProtection) { Write-Host '    - LSA protection: LSASS runs as a PPL (RunAsPPL), effective next boot' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1178,6 +1218,7 @@ function Invoke-Main {
     Disable-DomainCredentialStorage
     Set-SmbEncryption
     Set-InteractiveLogonHardening
+    Set-LsaProtection
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
