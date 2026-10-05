@@ -177,6 +177,12 @@ $scenarios = @(
        Plant  = { Set-SmbServerConfiguration -EncryptData $false -Confirm:$false -Force }
        Probe  = { -not (Get-SmbServerConfiguration).EncryptData }
        Desc   = 'the SMB server keeps serving sessions unencrypted (the planted EncryptData off)' }
+    @{ Switch = 'NoInteractiveLogon'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name DontDisplayLastUserName -Value 0 -PropertyType DWord -Force | Out-Null
+                  Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue }
+       Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' DontDisplayLastUserName) -ne 1 -or
+                  (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' InactivityTimeoutSecs) -ne 900 }
+       Desc   = 'the logon screen still names the last user and the console never auto-locks (the planted 0 / absent)' }
 )
 
 Write-Host ''

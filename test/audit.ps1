@@ -351,6 +351,15 @@ $smbEnc = Get-SmbServerConfiguration
 if ($smbEnc.EncryptData -and $smbEnc.RejectUnencryptedAccess) { P 'the SMB server encrypts every session and refuses clients that cannot' }
 else { F "SMB sessions can travel unencrypted (EncryptData = $($smbEnc.EncryptData), RejectUnencryptedAccess = $($smbEnc.RejectUnencryptedAccess))" 'run harden.ps1 (SMB encryption step)' }
 
+Write-Host '-- Interactive logon -----------------------------------------'
+$ilSys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+$ddlun = Get-Reg $ilSys 'DontDisplayLastUserName'
+if ($null -ne $ddlun -and [int]$ddlun -eq 1) { P 'the logon screen does not name the last user (DontDisplayLastUserName = 1)' }
+else { F "the logon screen names the last user who signed in (DontDisplayLastUserName = $(if ($null -eq $ddlun) { '<absent>' } else { $ddlun }))" 'run harden.ps1 (interactive logon step)' }
+$ito = Get-Reg $ilSys 'InactivityTimeoutSecs'
+if ($null -ne $ito -and [int]$ito -ge 1 -and [int]$ito -le 900) { P "an idle console locks itself (InactivityTimeoutSecs = $ito)" }
+else { F "an idle console never locks on its own (InactivityTimeoutSecs = $(if ($null -eq $ito) { '<absent>' } else { $ito }))" 'run harden.ps1 (interactive logon step): set it to 900 or less' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
