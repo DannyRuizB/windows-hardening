@@ -534,6 +534,12 @@ if ($enc.Result -eq 'ENCRYPTED') { Pass 'a fresh SMB session travels encrypted' 
 elseif ($enc.Result -eq 'PLAINTEXT') { Fail "a fresh SMB session is not encrypted: $($enc.Detail)" }
 else { Fail "the SMB encryption probe did not run: $($enc.Detail)" }
 
+Write-Host '== Interactive logon ==' -ForegroundColor White
+Test-RegEquals 'the logon screen does not name the last user' `
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'DontDisplayLastUserName' 1
+Test-RegEquals 'an idle console locks itself (15 min)' `
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'InactivityTimeoutSecs' 900
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

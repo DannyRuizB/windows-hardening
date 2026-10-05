@@ -108,6 +108,12 @@
          Live, measured: a fresh session goes Encrypted=True. Sessions
          already open stay unencrypted until they reconnect (measured), so
          the step says how many there are.
+     26. Interactive logon: DontDisplayLastUserName = 1 so the sign-in and
+         lock screen name no one (a shown username is half a credential, and
+         points at the privileged account), and InactivityTimeoutSecs = 900
+         so an idle console locks itself after 15 minutes at the machine
+         level. Measured on the runner: the name is shown (0) and there is no
+         inactivity limit (absent) - each does real work.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -153,6 +159,7 @@ param(
     [switch]$NoBlankPasswordLimit,
     [switch]$NoDomainCreds,
     [switch]$NoSmbEncryption,
+    [switch]$NoInteractiveLogon,
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -1079,6 +1086,30 @@ function Set-SmbEncryption {
     Write-Ok 'New SMB sessions travel encrypted, not just signed'
 }
 
+# ---- Step 26: interactive logon -------------------------------------------
+
+function Set-InteractiveLogonHardening {
+    if ($NoInteractiveLogon) { Write-Skip 'Skipping interactive-logon hardening'; return }
+    Write-Step 'Hardening the logon screen: no last user shown, console auto-locks when idle'
+    # Two CIS 2.3.7.x controls on the same key, both measured on the runner
+    # (Server 2025) as NOT in place, so each does real work:
+    #   - DontDisplayLastUserName (2.3.7.2): the sign-in / lock screen shows
+    #     the last account that logged on. That hands an attacker at the
+    #     keyboard (or a leaked RDP screenshot) half of a credential - a valid
+    #     username, and often which account is privileged. Measured: shipped 0
+    #     (the name IS shown). 1 blanks it.
+    #   - InactivityTimeoutSecs (2.3.7.3): with no machine inactivity limit an
+    #     unlocked console stays unlocked. 900 locks it after 15 minutes idle,
+    #     at the machine level, so it does not depend on a per-user screensaver
+    #     nobody set. Measured: shipped ABSENT (no limit at all).
+    $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    Set-RegistryValue -Path $sys -Name 'DontDisplayLastUserName' -Value 1 `
+        -Because 'the logon screen stops naming the last user' | Out-Null
+    Set-RegistryValue -Path $sys -Name 'InactivityTimeoutSecs' -Value 900 `
+        -Because 'the console locks after 15 minutes idle' | Out-Null
+    Write-Ok 'The logon screen names no one, and an idle console locks itself'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1113,6 +1144,7 @@ function Invoke-Main {
     if (-not $NoBlankPasswordLimit) { Write-Host '    - blank-password accounts confined to console logon' }
     if (-not $NoDomainCreds) { Write-Host '    - no saved passwords for network authentication (DisableDomainCreds)' }
     if (-not $NoSmbEncryption) { Write-Host '    - SMB encryption required on the server (EncryptData)' }
+    if (-not $NoInteractiveLogon) { Write-Host '    - interactive logon: no last user shown, console auto-locks when idle' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1145,6 +1177,7 @@ function Invoke-Main {
     Set-BlankPasswordLimit
     Disable-DomainCredentialStorage
     Set-SmbEncryption
+    Set-InteractiveLogonHardening
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
