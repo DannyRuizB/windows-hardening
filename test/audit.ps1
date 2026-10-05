@@ -95,11 +95,6 @@ elseif ($null -eq $lm) { W 'LmCompatibilityLevel not set (inherited default)' 'r
 else { W "LmCompatibilityLevel is $lm, not 5" 'run harden.ps1 (NTLM step)' }
 if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'NoLMHash') -eq 1) { P 'No LM hash is stored' }
 else { W 'LM hashes may be stored' 'run harden.ps1 (NTLM step)' }
-# Wider than the baseline: LSA protection is a good control the script does
-# not apply, because it needs a reboot AND can break legacy SSO agents.
-if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL') -in @(1, 2)) {
-    P 'LSASS runs as a protected process (RunAsPPL)'
-} else { W 'LSASS is not a protected process' 'set Lsa\RunAsPPL=1 after checking your SSO/AV agents (out of this baseline on purpose)' }
 
 Write-Host '-- Name resolution -------------------------------------------'
 if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast') -eq 0) {

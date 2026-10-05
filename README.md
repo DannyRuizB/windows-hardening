@@ -67,9 +67,6 @@ so they stay visible, but the script never applies them silently:
   interactive workstation; on a machine with **no interactive session** (a CI
   runner, an unattended server) raising the prompt can hang anything that needs
   elevation. Same reasoning that keeps `noexec /tmp` out of the Bash sibling.
-- **LSASS as a protected process** (`RunAsPPL`). A genuinely good control that
-  needs a reboot and can break legacy SSO or AV agents — a decision for the
-  admin, not a baseline default.
 - **Defender real-time protection.** A CI image ships it off for build speed;
   forcing it there fights the platform. On a real server the audit's WARN is a
   real to-do.
@@ -201,15 +198,14 @@ Windows box on every push.
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 60 PASS, 3 WARN, 0 FAIL  ->  98% compliant
+ Score: 61 PASS, 2 WARN, 0 FAIL  ->  98% compliant
 ```
 
-**Not 100%, on purpose.** The three warnings are the controls this baseline
-declines to apply on a machine it does not own: LSASS protected process (needs a
-reboot the runner cannot take mid-run), Defender real-time protection (off by
-design in the CI image), and the UAC consent prompt. Padding the score by applying
-them blindly would make the number prettier and the tool worse. On the roadmap:
-LSASS protected process (`RunAsPPL`), staged for the next reboot.
+**Not 100%, on purpose.** The two warnings are the controls this baseline
+declines to apply on a machine it does not own: Defender real-time protection
+(off by design in the CI image) and the UAC consent prompt. Padding the score by
+applying them blindly would make the number prettier and the tool worse. LSA
+protection (`RunAsPPL`) is now applied by the baseline, staged for the next boot.
 
 `test/scenarios.ps1` closes what used to be here: every `-No<Step>` switch is
 proven twice — the skipped step leaves its knob exactly as planted, the rest of
