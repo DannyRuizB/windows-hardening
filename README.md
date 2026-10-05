@@ -56,6 +56,7 @@ run reports **0**.
 | **No saved passwords for network logons** | CIS 2.3.10.4. *Remember my credentials* on an RDP or mapped-drive prompt, or `cmdkey /add`, stores a **Domain Password** credential in Credential Manager: Windows hands it to every network logon to that target without asking — and that stash is exactly what mimikatz `vault::cred` / `sekurlsa::credman` lift from the session. `DisableDomainCreds = 1` stops the saving. **Measured** on the runner (Server 2025), which ships an explicit **0**: with 1, live — no reboot, no new logon — `cmdkey /add` exits 1 with *Credentials cannot be saved from this logon session*, while **generic** credentials (`cmdkey /generic`, where apps keep their tokens) still save. And the catch, also measured: credentials saved **before** are **hidden, not deleted** — they vanish from `cmdkey /list` while the policy is on and come back intact if it returns to 0 — so the step counts the running account's saved ones first and says to remove them with `cmdkey /delete`. **Behavioural proof**: a throwaway `cmdkey /add`, anchored on a generic credential that must still save (or the probe is not measuring the policy); the e2e requires it **stored** on the box as shipped before `verify.ps1` demands the refusal. The cost is real: saved RDP / share passwords stop working, which is the point on a server. `-NoDomainCreds` to skip. |
 | **SMB encryption** | Step 1 made SMB sessions **signed** — tampering is detected — but the file contents still cross the wire readable. `EncryptData = $true` makes the server encrypt every session (SMB 3, AES), and `RejectUnencryptedAccess` (True as shipped, pinned) keeps a client that cannot encrypt out instead of falling back to cleartext. **Measured** on the runner (Server 2025) through a real session to its own IPv4: as shipped `EncryptData=False` and the session is *Encrypted=False, Signed=True*; with `EncryptData` set live, a **fresh** session is *Encrypted=True*. The catch, also measured: a session opened **before** the change kept going unencrypted — the client reused it — so the step counts the open sessions and says they pick up encryption when they reconnect, and the probe closes every session before it asks. **Behavioural proof**: a throwaway share, `net use \\<own IPv4>\<share>`, then `Get-SmbConnection`; the e2e requires it **PLAINTEXT** on the box as shipped before `verify.ps1` demands **ENCRYPTED**. `-NoSmbEncryption` to skip. |
 | **Interactive logon** | Two CIS 2.3.7.x controls on `…\Policies\System`, both **measured** on the runner (Server 2025) as not in place. `DontDisplayLastUserName = 1` (2.3.7.2) blanks the name the sign-in and lock screen otherwise show: a displayed username is half a credential, and usually points straight at the privileged account — shipped **0** (the name *is* shown). `InactivityTimeoutSecs = 900` (2.3.7.3) makes an idle console lock itself after 15 minutes at the **machine** level, not relying on a per-user screensaver nobody set — shipped **absent** (no limit at all). Both are state controls, verified by reading them back (like the LLMNR/NetBIOS step); the CI **plants** a 0 and an absent value and requires one run to repair both. `-NoInteractiveLogon` to skip. |
+| **LSA protection** | `RunAsPPL = 1` makes the kernel run **LSASS as a Protected Process Light**, so a token thief — mimikatz `sekurlsa::logonpasswords`, the first move after any SYSTEM foothold — can no longer read the credentials LSASS holds in memory, and no unsigned provider can load into it. **Measured** on the runner (Server 2025, via a probe branch): the value is **absent**, so LSASS runs unprotected. Two honest caveats, documented not hidden: it takes effect at the **next boot** (so the step writes the policy and `verify.ps1` confirms the registry value, not a running PPL — a CI runner never reboots), and value `1` is **UEFI-locked** where the firmware supports it (Server 2025 also takes `2` for a reversible enable; the audit treats either as protected). A custom SSP not signed as a PPL stops loading — roll out after checking you have none. `-NoLsaProtection` to skip. |
 
 ### Deliberately *not* in the baseline
 
@@ -66,9 +67,6 @@ so they stay visible, but the script never applies them silently:
   interactive workstation; on a machine with **no interactive session** (a CI
   runner, an unattended server) raising the prompt can hang anything that needs
   elevation. Same reasoning that keeps `noexec /tmp` out of the Bash sibling.
-- **LSASS as a protected process** (`RunAsPPL`). A genuinely good control that
-  needs a reboot and can break legacy SSO or AV agents — a decision for the
-  admin, not a baseline default.
 - **Defender real-time protection.** A CI image ships it off for build speed;
   forcing it there fights the platform. On a real server the audit's WARN is a
   real to-do.
@@ -193,22 +191,21 @@ and which candidates were dropped as unprovable here.
 
 ## Status
 
-Early but honest: 26 steps, 90 verify checks (fifteen of them behavioural), a scored
+Early but honest: 27 steps, 91 verify checks (fifteen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 60 PASS, 3 WARN, 0 FAIL  ->  98% compliant
+ Score: 61 PASS, 2 WARN, 0 FAIL  ->  98% compliant
 ```
 
-**Not 100%, on purpose.** The three warnings are the controls this baseline
-declines to apply on a machine it does not own: LSASS protected process (needs a
-reboot the runner cannot take mid-run), Defender real-time protection (off by
-design in the CI image), and the UAC consent prompt. Padding the score by applying
-them blindly would make the number prettier and the tool worse. On the roadmap:
-LSASS protected process (`RunAsPPL`), staged for the next reboot.
+**Not 100%, on purpose.** The two warnings are the controls this baseline
+declines to apply on a machine it does not own: Defender real-time protection
+(off by design in the CI image) and the UAC consent prompt. Padding the score by
+applying them blindly would make the number prettier and the tool worse. LSA
+protection (`RunAsPPL`) is now applied by the baseline, staged for the next boot.
 
 `test/scenarios.ps1` closes what used to be here: every `-No<Step>` switch is
 proven twice — the skipped step leaves its knob exactly as planted, the rest of

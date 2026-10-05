@@ -95,11 +95,6 @@ elseif ($null -eq $lm) { W 'LmCompatibilityLevel not set (inherited default)' 'r
 else { W "LmCompatibilityLevel is $lm, not 5" 'run harden.ps1 (NTLM step)' }
 if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'NoLMHash') -eq 1) { P 'No LM hash is stored' }
 else { W 'LM hashes may be stored' 'run harden.ps1 (NTLM step)' }
-# Wider than the baseline: LSA protection is a good control the script does
-# not apply, because it needs a reboot AND can break legacy SSO agents.
-if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL') -in @(1, 2)) {
-    P 'LSASS runs as a protected process (RunAsPPL)'
-} else { W 'LSASS is not a protected process' 'set Lsa\RunAsPPL=1 after checking your SSO/AV agents (out of this baseline on purpose)' }
 
 Write-Host '-- Name resolution -------------------------------------------'
 if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast') -eq 0) {
@@ -359,6 +354,13 @@ else { F "the logon screen names the last user who signed in (DontDisplayLastUse
 $ito = Get-Reg $ilSys 'InactivityTimeoutSecs'
 if ($null -ne $ito -and [int]$ito -ge 1 -and [int]$ito -le 900) { P "an idle console locks itself (InactivityTimeoutSecs = $ito)" }
 else { F "an idle console never locks on its own (InactivityTimeoutSecs = $(if ($null -eq $ito) { '<absent>' } else { $ito }))" 'run harden.ps1 (interactive logon step): set it to 900 or less' }
+
+Write-Host '-- LSA protection --------------------------------------------'
+# RunAsPPL 1 (UEFI-locked) or 2 (reversible) both run LSASS protected. Absent
+# as shipped (measured) -> credentials in LSASS are readable by any SYSTEM token.
+$ppl = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL'
+if ($null -ne $ppl -and [int]$ppl -in @(1, 2)) { P "LSASS runs protected as a PPL (RunAsPPL = $ppl; effective after a boot)" }
+else { F "LSASS is not protected - its credentials are readable by any SYSTEM token (RunAsPPL = $(if ($null -eq $ppl) { '<absent>' } else { $ppl }))" 'run harden.ps1 (LSA protection step); takes effect at the next boot' }
 
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin

@@ -540,6 +540,12 @@ Test-RegEquals 'the logon screen does not name the last user' `
 Test-RegEquals 'an idle console locks itself (15 min)' `
     'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'InactivityTimeoutSecs' 900
 
+Write-Host '== LSA protection (RunAsPPL) ==' -ForegroundColor White
+# The registry value, not a running PPL: RunAsPPL takes effect at boot and a CI
+# runner never reboots, so the honest check is that the policy is written.
+Test-RegEquals 'LSASS is set to run protected (RunAsPPL, effective next boot)' `
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL' 1
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

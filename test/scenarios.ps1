@@ -177,6 +177,10 @@ $scenarios = @(
        Plant  = { Set-SmbServerConfiguration -EncryptData $false -Confirm:$false -Force }
        Probe  = { -not (Get-SmbServerConfiguration).EncryptData }
        Desc   = 'the SMB server keeps serving sessions unencrypted (the planted EncryptData off)' }
+    @{ Switch = 'NoLsaProtection'
+       Plant  = { Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -ErrorAction SilentlyContinue }
+       Probe  = { $null -eq (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' RunAsPPL) }
+       Desc   = 'LSASS keeps running unprotected (RunAsPPL stays absent)' }
     @{ Switch = 'NoInteractiveLogon'
        Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name DontDisplayLastUserName -Value 0 -PropertyType DWord -Force | Out-Null
                   Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue }
