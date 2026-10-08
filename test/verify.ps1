@@ -556,6 +556,28 @@ foreach ($bn in 'LegalNoticeCaption', 'LegalNoticeText') {
     else { Fail "the logon banner is blank - expected text in $bn" }
 }
 
+Write-Host '== ICMP redirects and source routing ==' -ForegroundColor White
+# The LIVE stack, not a registry value: the MSS registry knobs were measured
+# not to change it, and this is what the kernel is actually doing.
+foreach ($fam in 'IPv4', 'IPv6') {
+    $proto = & "Get-Net${fam}Protocol"
+    if ("$($proto.IcmpRedirects)" -eq 'Disabled') { Pass "$fam refuses ICMP redirects (IcmpRedirects = Disabled)" }
+    else { Fail "$fam still accepts ICMP redirects (IcmpRedirects = $($proto.IcmpRedirects))" }
+    if ("$($proto.SourceRoutingBehavior)" -eq 'Drop') { Pass "$fam drops source-routed packets (SourceRoutingBehavior = Drop)" }
+    else { Fail "$fam does not drop source-routed packets (SourceRoutingBehavior = $($proto.SourceRoutingBehavior))" }
+}
+
+Write-Host '== Automatic logon ==' -ForegroundColor White
+Test-RegEquals 'no account signs itself in at boot' `
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' 'AutoAdminLogon' '0'
+# Behavioural: as shipped (measured, e2e) a fresh member of Users READ the
+# administrator's 44-character password here; after hardening it must find none.
+$aal = & (Join-Path $PSScriptRoot 'autologon-probe.ps1')
+Write-Host "        autologon probe: $($aal.Result) - $($aal.Detail)"
+if ($aal.Result -eq 'NONE') { Pass 'a standard user finds no autologon password in the registry' }
+elseif ($aal.Result -eq 'EXPOSED') { Fail "a standard user can still read an autologon password: $($aal.Detail)" }
+else { Fail "the autologon probe did not run: $($aal.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

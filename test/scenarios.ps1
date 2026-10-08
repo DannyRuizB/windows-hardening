@@ -177,6 +177,16 @@ $scenarios = @(
        Plant  = { Set-SmbServerConfiguration -EncryptData $false -Confirm:$false -Force }
        Probe  = { -not (Get-SmbServerConfiguration).EncryptData }
        Desc   = 'the SMB server keeps serving sessions unencrypted (the planted EncryptData off)' }
+    @{ Switch = 'NoIcmpRedirects'
+       Plant  = { Set-NetIPv4Protocol -IcmpRedirects Enabled -SourceRoutingBehavior DontForward; Set-NetIPv6Protocol -IcmpRedirects Enabled -SourceRoutingBehavior DontForward }
+       Probe  = { "$((Get-NetIPv4Protocol).IcmpRedirects)" -eq 'Enabled' }
+       Desc   = 'IPv4 keeps accepting ICMP redirects (the planted shipped values)' }
+    @{ Switch = 'NoAutologon'
+       Plant  = { $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+                  New-ItemProperty -Path $k -Name AutoAdminLogon -Value '1' -PropertyType String -Force | Out-Null
+                  New-ItemProperty -Path $k -Name DefaultPassword -Value 'planted-not-a-real-password' -PropertyType String -Force | Out-Null }
+       Probe  = { $null -ne (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' DefaultPassword) }
+       Desc   = 'the planted autologon password stays in the registry' }
     @{ Switch = 'NoLogonBanner'
        Plant  = { foreach ($n in 'LegalNoticeCaption', 'LegalNoticeText') {
                       New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name $n -Value '' -PropertyType String -Force | Out-Null } }

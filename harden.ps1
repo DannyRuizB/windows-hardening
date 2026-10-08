@@ -126,6 +126,20 @@
          before the credential prompt. Measured on the runner: the caption is
          an empty string and the text a single NUL character - no banner at
          all. The wording is yours to set with -BannerCaption / -BannerText.
+     29. ICMP redirects and source routing: the IPv4 and IPv6 stacks stop
+         accepting ICMP redirects (a neighbour rewriting this box's routes)
+         and drop source-routed packets instead of only not forwarding them.
+         Measured on the runner: redirects enabled and source routing at
+         DontForward for both families. Set live AND persistent with
+         Set-NetIPv4Protocol / Set-NetIPv6Protocol - the MSS registry values
+         (EnableICMPRedirect, DisableIPSourceRouting) were measured NOT to
+         change the running stack, so they are not what this relies on.
+     30. Automatic logon off and its password out of the registry: with
+         AutoAdminLogon the account's password sits in plain text in the
+         Winlogon key, readable by every local user. Measured on the runner
+         image: AutoAdminLogon 1 and a 44-character administrator password
+         there, which a freshly created standard user read. AutoAdminLogon
+         goes to 0 and DefaultPassword is removed.
 
 .PARAMETER BannerCaption
     Title of the logon banner (step 28). Default: 'Authorized use only'.
@@ -181,6 +195,8 @@ param(
     [switch]$NoInteractiveLogon,
     [switch]$NoLsaProtection,
     [switch]$NoLogonBanner,
+    [switch]$NoIcmpRedirects,
+    [switch]$NoAutologon,
     [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
     [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
         'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
@@ -1195,6 +1211,87 @@ function Set-LogonBanner {
     Write-Ok 'The sign-in screen warns before it asks for credentials'
 }
 
+# ---- Step 29: ICMP redirects and source routing ---------------------------
+
+function Set-IcmpRedirectPolicy {
+    if ($NoIcmpRedirects) { Write-Skip 'Skipping ICMP redirects / source routing'; return }
+    Write-Step 'Refusing ICMP redirects and dropping source-routed packets (IPv4 and IPv6)'
+    # An ICMP redirect is a router telling this host "use that gateway
+    # instead" - and anyone on the segment can send one, so it is a way to
+    # pull this box's traffic through an attacker without touching ARP.
+    # Source routing lets the SENDER dictate the path a packet takes, the
+    # classic way past a filter that trusts where traffic seems to come from.
+    # Server/CIS baselines turn both off; the Linux twins' sysctl step does
+    # the same (accept_redirects=0, accept_source_route=0).
+    #
+    # Measured on the runner (Server 2025, via a probe branch): ICMP
+    # redirects ENABLED and source routing at DontForward (not forwarded,
+    # but still processed when addressed here) for both IPv4 and IPv6.
+    # And one finding that decided HOW: the MSS registry values the old
+    # baselines set (Tcpip\Parameters EnableICMPRedirect=0,
+    # DisableIPSourceRouting=2) did NOT change the running stack - netsh
+    # still said "ICMP Redirects: enabled" after writing them - and netsh
+    # does not write them either: they are a separate, boot-time layer.
+    # Set-NetIPv4Protocol / Set-NetIPv6Protocol change the live stack AND
+    # its persistent store (measured: `netsh ... show global
+    # store=persistent` reads disabled/drop afterwards), so that is what
+    # this uses and what verify.ps1 reads back.
+    foreach ($fam in 'IPv4', 'IPv6') {
+        $get = "Get-Net${fam}Protocol"
+        $cur = & $get
+        if ("$($cur.IcmpRedirects)" -eq 'Disabled' -and "$($cur.SourceRoutingBehavior)" -eq 'Drop') {
+            Write-Ok "$fam already refuses redirects and drops source-routed packets"
+            continue
+        }
+        $was = "IcmpRedirects=$($cur.IcmpRedirects) SourceRoutingBehavior=$($cur.SourceRoutingBehavior)"
+        if ($DryRun) { Write-Warn2 "(dry-run) would set $fam IcmpRedirects=Disabled SourceRoutingBehavior=Drop (currently $was)"; continue }
+        & "Set-Net${fam}Protocol" -IcmpRedirects Disabled -SourceRoutingBehavior Drop
+        $Script:ChangeCount++
+        Write-Warn2 "set $fam IcmpRedirects=Disabled SourceRoutingBehavior=Drop, was $was"
+    }
+    Write-Ok 'No neighbour can redirect this box, and no sender can route through it'
+}
+
+# ---- Step 30: automatic logon and its cleartext password -------------------
+
+function Disable-Autologon {
+    if ($NoAutologon) { Write-Skip 'Skipping automatic logon'; return }
+    Write-Step 'Turning automatic logon off and taking its password out of the registry'
+    # Automatic logon (AutoAdminLogon = 1) signs an account in at every boot
+    # with the password kept in Winlogon\DefaultPassword - in PLAIN TEXT, in
+    # a key every local user can read. CIS 18.4.1 (MSS AutoAdminLogon) wants
+    # it off on a server.
+    #
+    # Measured on the runner image: AutoAdminLogon = 1, ForceAutoLogon = 1,
+    # DefaultUserName = the runner's administrator, and a 44-character
+    # DefaultPassword - which a freshly created member of Users read through
+    # its own token (test/autologon-probe.ps1). That is the whole privilege
+    # boundary handed over in one registry read.
+    #
+    # AutoAdminLogon goes to 0 (the box boots to the sign-in screen) and
+    # DefaultPassword is DELETED. Not touched, said out loud: an LSA-secret
+    # copy of the password (where Sysinternals Autologon keeps it; the runner
+    # has one too) is readable only by SYSTEM and unused once AutoAdminLogon
+    # is 0 - remove it with `Autologon /delete` if the box had one. If a
+    # kiosk really needs autologon, use that tool: it never writes the
+    # registry value. Changing the exposed account's password is the other
+    # half - anyone could have read it already.
+    $wl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Set-RegistryValue -Path $wl -Name 'AutoAdminLogon' -Value '0' -Type String `
+        -Because 'no account signs itself in at boot' | Out-Null
+    $dp = (Get-ItemProperty -LiteralPath $wl -ErrorAction SilentlyContinue).PSObject.Properties['DefaultPassword']
+    if ($null -eq $dp) {
+        Write-Ok "$wl\DefaultPassword already absent"
+    } elseif ($DryRun) {
+        Write-Warn2 "(dry-run) would remove $wl\DefaultPassword ($("$($dp.Value)".Length) characters, not shown)"
+    } else {
+        Remove-ItemProperty -LiteralPath $wl -Name 'DefaultPassword'
+        $Script:ChangeCount++
+        Write-Warn2 "removed $wl\DefaultPassword ($("$($dp.Value)".Length) characters, not shown) - change that account's password: it was readable"
+    }
+    Write-Ok 'No password sits in the registry for anyone to read'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1232,6 +1329,8 @@ function Invoke-Main {
     if (-not $NoInteractiveLogon) { Write-Host '    - interactive logon: no last user shown, console auto-locks when idle' }
     if (-not $NoLsaProtection) { Write-Host '    - LSA protection: LSASS runs as a PPL (RunAsPPL), effective next boot' }
     if (-not $NoLogonBanner) { Write-Host "    - logon banner: '$BannerCaption' shown before the credential prompt" }
+    if (-not $NoIcmpRedirects) { Write-Host '    - ICMP redirects refused and source-routed packets dropped (IPv4 and IPv6)' }
+    if (-not $NoAutologon) { Write-Host '    - automatic logon off, its cleartext password removed from the registry' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1267,6 +1366,8 @@ function Invoke-Main {
     Set-InteractiveLogonHardening
     Set-LsaProtection
     Set-LogonBanner
+    Set-IcmpRedirectPolicy
+    Disable-Autologon
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

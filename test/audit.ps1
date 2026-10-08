@@ -372,6 +372,24 @@ $bTxt = "$(Get-Reg $bSys 'LegalNoticeText')" -replace '[\x00\s]', ''
 if ($bCap -and $bTxt) { P 'the sign-in screen shows a warning banner (LegalNoticeCaption + LegalNoticeText)' }
 else { F "no logon banner - the sign-in screen warns no one (caption $(if ($bCap) { 'set' } else { 'blank' }), text $(if ($bTxt) { 'set' } else { 'blank' }))" 'run harden.ps1 (logon banner step)' }
 
+Write-Host '-- ICMP redirects / source routing ---------------------------'
+# The live stack (Get-Net*Protocol): the MSS registry values do not change it.
+foreach ($fam in 'IPv4', 'IPv6') {
+    $proto = & "Get-Net${fam}Protocol"
+    if ("$($proto.IcmpRedirects)" -eq 'Disabled' -and "$($proto.SourceRoutingBehavior)" -eq 'Drop') { P "$fam refuses ICMP redirects and drops source-routed packets" }
+    else { F "$fam accepts ICMP redirects or source routing (IcmpRedirects = $($proto.IcmpRedirects), SourceRoutingBehavior = $($proto.SourceRoutingBehavior))" 'run harden.ps1 (ICMP redirects step)' }
+}
+
+Write-Host '-- Automatic logon -------------------------------------------'
+# A password in Winlogon\DefaultPassword is plain text in a key every local
+# user can read (measured: a fresh member of Users read the runner's).
+$wlKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+$aalVal = Get-Reg $wlKey 'AutoAdminLogon'
+$dpProp = (Get-ItemProperty -LiteralPath $wlKey -ErrorAction SilentlyContinue).PSObject.Properties['DefaultPassword']
+if ($null -ne $dpProp -and "$($dpProp.Value)" -ne '') { F "an autologon password sits in the registry in plain text ($("$($dpProp.Value)".Length) characters, readable by any local user)" 'run harden.ps1 (automatic logon step), then change that account''s password' }
+elseif ("$aalVal" -eq '1') { W 'automatic logon is on (AutoAdminLogon = 1), with no password in the registry' 'run harden.ps1 (automatic logon step), or keep it only on a kiosk via Sysinternals Autologon' }
+else { P 'automatic logon is off and no password sits in the registry' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an
