@@ -73,6 +73,10 @@ jobs:
           $encShipped = .\test\smb-encryption-probe.ps1
           "SMB encryption probe as shipped: $($encShipped.Result) - $($encShipped.Detail)"
           if ($encShipped.Result -ne 'PLAINTEXT') { throw "a fresh SMB session is not plaintext even as shipped ($($encShipped.Result)) - the ENCRYPTED after hardening would prove nothing" }
+          # Step 28: measured, the caption ships '' and the text a single NUL.
+          # Print the char codes, so a length-1 "present" value reads as what it is.
+          $bSys = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          foreach ($n in 'LegalNoticeCaption', 'LegalNoticeText') { $v = $bSys.PSObject.Properties[$n]; "logon banner as shipped: $n = $(if ($null -eq $v) { '<absent>' } else { "length $("$($v.Value)".Length), codes [$((([int[]][char[]]"$($v.Value)") | Select-Object -First 8) -join ',')]" })" }
           $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,

@@ -177,6 +177,11 @@ $scenarios = @(
        Plant  = { Set-SmbServerConfiguration -EncryptData $false -Confirm:$false -Force }
        Probe  = { -not (Get-SmbServerConfiguration).EncryptData }
        Desc   = 'the SMB server keeps serving sessions unencrypted (the planted EncryptData off)' }
+    @{ Switch = 'NoLogonBanner'
+       Plant  = { foreach ($n in 'LegalNoticeCaption', 'LegalNoticeText') {
+                      New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name $n -Value '' -PropertyType String -Force | Out-Null } }
+       Probe  = { -not ("$(Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' LegalNoticeText)" -replace '[\x00\s]', '') }
+       Desc   = 'the sign-in screen keeps showing no banner (the planted blank caption and text)' }
     @{ Switch = 'NoLsaProtection'
        Plant  = { Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -ErrorAction SilentlyContinue }
        Probe  = { $null -eq (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' RunAsPPL) }

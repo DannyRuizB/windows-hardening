@@ -362,6 +362,16 @@ $ppl = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL'
 if ($null -ne $ppl -and [int]$ppl -in @(1, 2)) { P "LSASS runs protected as a PPL (RunAsPPL = $ppl; effective after a boot)" }
 else { F "LSASS is not protected - its credentials are readable by any SYSTEM token (RunAsPPL = $(if ($null -eq $ppl) { '<absent>' } else { $ppl }))" 'run harden.ps1 (LSA protection step); takes effect at the next boot' }
 
+Write-Host '-- Logon banner ----------------------------------------------'
+# Both must carry real text. As shipped (measured) the caption is '' and the
+# text a single NUL - "present", length 1 - so strip NULs and whitespace
+# before calling it set, or the factory value passes.
+$bSys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+$bCap = "$(Get-Reg $bSys 'LegalNoticeCaption')" -replace '[\x00\s]', ''
+$bTxt = "$(Get-Reg $bSys 'LegalNoticeText')" -replace '[\x00\s]', ''
+if ($bCap -and $bTxt) { P 'the sign-in screen shows a warning banner (LegalNoticeCaption + LegalNoticeText)' }
+else { F "no logon banner - the sign-in screen warns no one (caption $(if ($bCap) { 'set' } else { 'blank' }), text $(if ($bTxt) { 'set' } else { 'blank' }))" 'run harden.ps1 (logon banner step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

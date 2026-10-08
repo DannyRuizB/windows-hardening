@@ -546,6 +546,16 @@ Write-Host '== LSA protection (RunAsPPL) ==' -ForegroundColor White
 Test-RegEquals 'LSASS is set to run protected (RunAsPPL, effective next boot)' `
     'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL' 1
 
+Write-Host '== Logon banner ==' -ForegroundColor White
+# Real text, not just "present": the factory text is a single NUL (measured),
+# so a bare existence check would pass on the box as shipped.
+$bSys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+foreach ($bn in 'LegalNoticeCaption', 'LegalNoticeText') {
+    $bv = try { "$((Get-ItemProperty -LiteralPath $bSys -Name $bn -ErrorAction Stop).$bn)" } catch { '' }
+    if (($bv -replace '[\x00\s]', '') -ne '') { Pass "the logon banner carries text ($bn, $($bv.Length) chars)" }
+    else { Fail "the logon banner is blank - expected text in $bn" }
+}
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

@@ -121,6 +121,18 @@
          the runner. Effective at the next boot, and UEFI-locked at value 1
          (Server 2025 also takes 2 for a reversible enable); the audit treats
          either as protected.
+     28. Logon banner: LegalNoticeCaption + LegalNoticeText put a warning on
+         the sign-in screen (console and RDP) that the user must acknowledge
+         before the credential prompt. Measured on the runner: the caption is
+         an empty string and the text a single NUL character - no banner at
+         all. The wording is yours to set with -BannerCaption / -BannerText.
+
+.PARAMETER BannerCaption
+    Title of the logon banner (step 28). Default: 'Authorized use only'.
+
+.PARAMETER BannerText
+    Body of the logon banner (step 28). Default: a short authorized-use and
+    monitoring notice. Have your legal team word the real one.
 
 .PARAMETER DryRun
     Print what would change and change nothing.
@@ -168,6 +180,11 @@ param(
     [switch]$NoSmbEncryption,
     [switch]$NoInteractiveLogon,
     [switch]$NoLsaProtection,
+    [switch]$NoLogonBanner,
+    [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
+    [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
+        'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
+        'unauthorized use may be reported to the authorities.'),
     [switch]$DryRun,
     [switch]$Yes
 )
@@ -1149,6 +1166,35 @@ function Set-LsaProtection {
     Write-Ok 'LSASS is set to run protected (effective after a reboot)'
 }
 
+# ---- Step 28: Logon banner -------------------------------------------------
+
+function Set-LogonBanner {
+    if ($NoLogonBanner) { Write-Skip 'Skipping the logon banner'; return }
+    Write-Step 'Putting an authorized-use warning on the sign-in screen (logon banner)'
+    # CIS 2.3.7.4 / 2.3.7.5. With both values set, Winlogon shows the caption
+    # and text BEFORE the credential prompt - on the console and over RDP -
+    # and the user has to click OK to go on. It stops no attacker by itself;
+    # its job is the paper trail: an intruder who was told "authorized use
+    # only, activity is monitored" cannot later claim the box looked open, and
+    # many policies and audits require it. The Windows face of the Linux
+    # twins' /etc/issue step.
+    #
+    # Measured on the runner (Server 2025, via a probe branch): the caption is
+    # an EMPTY string and the text a single NUL character, so no banner is
+    # shown. Note what that means for anyone reading it back: the text is
+    # "present" and has length 1 - a check for "is it set" has to strip NULs
+    # and whitespace, or it passes on the factory value (audit.ps1 does).
+    # Both must be non-empty: Windows only shows the banner when the text is.
+    # State-verified, not behavioural - seeing the banner needs a real
+    # interactive logon, which a headless runner does not have.
+    $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    Set-RegistryValue -Path $sys -Name 'LegalNoticeCaption' -Value $BannerCaption -Type String `
+        -Because 'the sign-in screen carries a warning title' | Out-Null
+    Set-RegistryValue -Path $sys -Name 'LegalNoticeText' -Value $BannerText -Type String `
+        -Because 'the user acknowledges authorized use before signing in' | Out-Null
+    Write-Ok 'The sign-in screen warns before it asks for credentials'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1185,6 +1231,7 @@ function Invoke-Main {
     if (-not $NoSmbEncryption) { Write-Host '    - SMB encryption required on the server (EncryptData)' }
     if (-not $NoInteractiveLogon) { Write-Host '    - interactive logon: no last user shown, console auto-locks when idle' }
     if (-not $NoLsaProtection) { Write-Host '    - LSA protection: LSASS runs as a PPL (RunAsPPL), effective next boot' }
+    if (-not $NoLogonBanner) { Write-Host "    - logon banner: '$BannerCaption' shown before the credential prompt" }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1219,6 +1266,7 @@ function Invoke-Main {
     Set-SmbEncryption
     Set-InteractiveLogonHardening
     Set-LsaProtection
+    Set-LogonBanner
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
