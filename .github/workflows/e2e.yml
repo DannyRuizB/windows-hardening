@@ -77,6 +77,16 @@ jobs:
           # Print the char codes, so a length-1 "present" value reads as what it is.
           $bSys = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
           foreach ($n in 'LegalNoticeCaption', 'LegalNoticeText') { $v = $bSys.PSObject.Properties[$n]; "logon banner as shipped: $n = $(if ($null -eq $v) { '<absent>' } else { "length $("$($v.Value)".Length), codes [$((([int[]][char[]]"$($v.Value)") | Select-Object -First 8) -join ',')]" })" }
+          # Steps 29-30, measured: redirects enabled / DontForward on both stacks,
+          # and automatic logon with the administrator's password in plain text
+          # that a fresh standard user can read. The probe must say EXPOSED here,
+          # or its NONE after hardening would prove nothing. (Length only, never the value.)
+          foreach ($fam in 'IPv4', 'IPv6') { $pr = & "Get-Net${fam}Protocol"; "$fam as shipped: IcmpRedirects=$($pr.IcmpRedirects) SourceRoutingBehavior=$($pr.SourceRoutingBehavior)" }
+          $wlp = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+          "autologon as shipped: AutoAdminLogon=$($wlp.PSObject.Properties['AutoAdminLogon'].Value) DefaultPassword present=$($null -ne $wlp.PSObject.Properties['DefaultPassword'])"
+          $aalShipped = .\test\autologon-probe.ps1
+          "autologon probe as shipped: $($aalShipped.Result) - $($aalShipped.Detail)"
+          if ($aalShipped.Result -ne 'EXPOSED') { throw "a standard user cannot read an autologon password even as shipped ($($aalShipped.Result)) - the NONE after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
