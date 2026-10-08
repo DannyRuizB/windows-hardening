@@ -57,6 +57,7 @@ run reports **0**.
 | **SMB encryption** | Step 1 made SMB sessions **signed** — tampering is detected — but the file contents still cross the wire readable. `EncryptData = $true` makes the server encrypt every session (SMB 3, AES), and `RejectUnencryptedAccess` (True as shipped, pinned) keeps a client that cannot encrypt out instead of falling back to cleartext. **Measured** on the runner (Server 2025) through a real session to its own IPv4: as shipped `EncryptData=False` and the session is *Encrypted=False, Signed=True*; with `EncryptData` set live, a **fresh** session is *Encrypted=True*. The catch, also measured: a session opened **before** the change kept going unencrypted — the client reused it — so the step counts the open sessions and says they pick up encryption when they reconnect, and the probe closes every session before it asks. **Behavioural proof**: a throwaway share, `net use \\<own IPv4>\<share>`, then `Get-SmbConnection`; the e2e requires it **PLAINTEXT** on the box as shipped before `verify.ps1` demands **ENCRYPTED**. `-NoSmbEncryption` to skip. |
 | **Interactive logon** | Two CIS 2.3.7.x controls on `…\Policies\System`, both **measured** on the runner (Server 2025) as not in place. `DontDisplayLastUserName = 1` (2.3.7.2) blanks the name the sign-in and lock screen otherwise show: a displayed username is half a credential, and usually points straight at the privileged account — shipped **0** (the name *is* shown). `InactivityTimeoutSecs = 900` (2.3.7.3) makes an idle console lock itself after 15 minutes at the **machine** level, not relying on a per-user screensaver nobody set — shipped **absent** (no limit at all). Both are state controls, verified by reading them back (like the LLMNR/NetBIOS step); the CI **plants** a 0 and an absent value and requires one run to repair both. `-NoInteractiveLogon` to skip. |
 | **LSA protection** | `RunAsPPL = 1` makes the kernel run **LSASS as a Protected Process Light**, so a token thief — mimikatz `sekurlsa::logonpasswords`, the first move after any SYSTEM foothold — can no longer read the credentials LSASS holds in memory, and no unsigned provider can load into it. **Measured** on the runner (Server 2025, via a probe branch): the value is **absent**, so LSASS runs unprotected. Two honest caveats, documented not hidden: it takes effect at the **next boot** (so the step writes the policy and `verify.ps1` confirms the registry value, not a running PPL — a CI runner never reboots), and value `1` is **UEFI-locked** where the firmware supports it (Server 2025 also takes `2` for a reversible enable; the audit treats either as protected). A custom SSP not signed as a PPL stops loading — roll out after checking you have none. `-NoLsaProtection` to skip. |
+| **Logon banner** | CIS 2.3.7.4 / 2.3.7.5. `LegalNoticeCaption` + `LegalNoticeText` make Winlogon show a warning **before the credential prompt** — on the console and over RDP — that the user has to acknowledge. It stops no attacker by itself; its job is the paper trail: someone told *authorized use only, activity is monitored* cannot later claim the box looked open, and many policies and audits require it. The Windows face of the Linux twins' `/etc/issue` step. **Measured** on the runner (Server 2025, via a probe branch): the caption ships as an **empty string** and the text as **a single NUL character** — no banner. That NUL is the trap: the text is *present* and has length 1, so a naive "is it set" check passes on the factory value; `audit.ps1` and `verify.ps1` strip NULs and whitespace before calling it set. The wording is yours: `-BannerCaption` / `-BannerText` (the default is a short authorized-use and monitoring notice — have legal word the real one). State-verified: seeing the banner needs a real interactive logon, which a headless runner does not have. The CI **plants** a blank caption and text and requires one run to repair them. `-NoLogonBanner` to skip. |
 
 ### Deliberately *not* in the baseline
 
@@ -187,18 +188,22 @@ Server 2025 runner, not assumptions: a probe job reported what the box actually
 allows (registry writes, `Get-SmbServerConfiguration`, `auditpol`, `secedit`,
 firewall cmdlets, Defender) and the current value of every candidate knob. That
 evidence is what decided which steps are real, which offenders need planting,
-and which candidates were dropped as unprovable here.
+and which candidates were dropped as unprovable here — the latest being
+`ScRemoveOption` (lock the session when a smart card is pulled): the image ships
+`"0"`, but the *Smart Card Removal Policy* service that enforces it is not even
+installed on the runner, so a value written there would be verified and never
+obeyed.
 
 ## Status
 
-Early but honest: 27 steps, 91 verify checks (fifteen of them behavioural), a scored
+Early but honest: 28 steps, 93 verify checks (fifteen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 61 PASS, 2 WARN, 0 FAIL  ->  98% compliant
+ Score: 62 PASS, 2 WARN, 0 FAIL  ->  98% compliant
 ```
 
 **Not 100%, on purpose.** The two warnings are the controls this baseline
