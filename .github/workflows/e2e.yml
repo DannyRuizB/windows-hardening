@@ -85,9 +85,9 @@ jobs:
           # Step 3 (mDNS): the knob as shipped, and who actually listens on
           # UDP 5353 - the exposure the LLMNR policy does not cover.
           $mdns = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name EnableMDNS -ErrorAction SilentlyContinue).EnableMDNS
-          "EnableMDNS as shipped: $(if ($null -eq $mdns) { '<absent> (= on)' } else { $mdns })"
           $l5353 = @(Get-NetUDPEndpoint -LocalPort 5353 -ErrorAction SilentlyContinue)
-          "UDP 5353 listeners as shipped: $($l5353.Count) - " + (($l5353 | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess) [$((Get-CimInstance Win32_Service -Filter "ProcessId=$($_.OwningProcess)" | Select-Object -ExpandProperty Name) -join ',')]" }) -join '; ')
+          # ::notice:: so the measurement shows in the run summary, not only the log.
+          "::notice title=mDNS as shipped::EnableMDNS=$(if ($null -eq $mdns) { '<absent> (= on)' } else { $mdns }); UDP 5353 listeners: $($l5353.Count) - " + (($l5353 | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess) [$((Get-CimInstance Win32_Service -Filter "ProcessId=$($_.OwningProcess)" | Select-Object -ExpandProperty Name) -join ',')]" }) -join '; ')
           $wlp = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
           "autologon as shipped: AutoAdminLogon=$($wlp.PSObject.Properties['AutoAdminLogon'].Value) DefaultPassword present=$($null -ne $wlp.PSObject.Properties['DefaultPassword'])"
           $aalShipped = .\test\autologon-probe.ps1
@@ -289,11 +289,11 @@ jobs:
         run: |
           function Show5353([string]$when) {
             $l = @(Get-NetUDPEndpoint -LocalPort 5353 -ErrorAction SilentlyContinue)
-            "UDP 5353 listeners ${when}: $($l.Count) - " + (($l | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess)" }) -join '; ')
+            "::notice title=mDNS ${when}::UDP 5353 listeners: $($l.Count) - " + (($l | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess)" }) -join '; ')
           }
           Show5353 'after hardening'
-          try { Restart-Service Dnscache -Force -ErrorAction Stop; 'Restart-Service Dnscache: allowed' ; Start-Sleep 3; Show5353 'after a DNS Client restart' }
-          catch { "Restart-Service Dnscache: refused - $($_.Exception.Message)" }
+          try { Restart-Service Dnscache -Force -ErrorAction Stop; '::notice title=mDNS::Restart-Service Dnscache allowed'; Start-Sleep 3; Show5353 'after a DNS Client restart' }
+          catch { "::notice title=mDNS::Restart-Service Dnscache refused - $($_.Exception.Message)" }
           $global:LASTEXITCODE = 0
 
       - name: Score the box
