@@ -19,10 +19,10 @@
          stops keeping cleartext passwords in memory for a 2008-era
          protocol. This is the single line that turns a mimikatz dump from
          "here are the passwords" into "here are some hashes".
-      3. Name-resolution poisoning (LLMNR + NetBIOS): both protocols
-         broadcast "who is FILESRV?" to the whole segment and believe
-         whoever answers first. That is what Responder answers. DNS does
-         not need them.
+      3. Name-resolution poisoning (LLMNR + NetBIOS + mDNS): all three
+         protocols broadcast "who is FILESRV?" to the whole segment and
+         believe whoever answers first. That is what Responder answers.
+         DNS does not need them.
       4. NTLM policy: refuse LM and NTLMv1 (LmCompatibilityLevel 5) and
          never store an LM hash. LM is brute-forceable in minutes.
       5. Firewall posture: all three profiles enabled with an explicit
@@ -315,11 +315,11 @@ function Disable-WDigestCaching {
     Write-Ok 'WDigest will not hand out cleartext passwords'
 }
 
-# ---- Step 3: name-resolution poisoning (LLMNR + NetBIOS) -------------------
+# ---- Step 3: name-resolution poisoning (LLMNR + NetBIOS + mDNS) ------------
 
 function Disable-NameResolutionPoisoning {
-    if ($NoNameResolution) { Write-Skip 'Skipping LLMNR/NetBIOS hardening'; return }
-    Write-Step 'Disabling LLMNR and NetBIOS name resolution'
+    if ($NoNameResolution) { Write-Skip 'Skipping LLMNR/NetBIOS/mDNS hardening'; return }
+    Write-Step 'Disabling LLMNR, NetBIOS and mDNS name resolution'
     # Both protocols shout "who is FILESRV?" at the whole broadcast domain
     # and trust whoever answers first. Responder answers first, collects the
     # NTLM exchange and either cracks it offline or relays it. DNS does not
@@ -343,7 +343,19 @@ function Disable-NameResolutionPoisoning {
     } else {
         Write-Warn2 'no NetBT interfaces found - nothing to disable'
     }
-    Write-Ok 'Nothing on this host answers LLMNR or NetBIOS name queries'
+
+    # mDNS is the third protocol Responder poisons, alongside LLMNR and
+    # NBT-NS: the same "who is X.local?" multicast, on UDP 5353. On current
+    # Windows the DNS Client service speaks it natively, and the
+    # LLMNR policy above does NOT switch it off - EnableMulticast is LLMNR
+    # only. EnableMDNS = 0 under the Dnscache parameters does; absent means
+    # ON. The DNS Client reads it when it starts and cannot be restarted by
+    # hand on current Windows, so it takes effect at the next boot.
+    if (Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' `
+            -Name 'EnableMDNS' -Value 0 -Because 'mDNS off') {
+        $Script:RebootNeeded += 'mDNS (EnableMDNS is read when the DNS Client starts)'
+    }
+    Write-Ok 'Nothing on this host answers LLMNR, NetBIOS or mDNS name queries'
 }
 
 # ---- Step 4: NTLM policy ---------------------------------------------------
@@ -1303,7 +1315,7 @@ function Invoke-Main {
     Write-Host 'About to apply:'
     if (-not $NoSmbSigning) { Write-Host '    - SMB signing required (server and client)' }
     if (-not $NoWDigest) { Write-Host '    - WDigest cleartext credential caching off' }
-    if (-not $NoNameResolution) { Write-Host '    - LLMNR and NetBIOS name resolution off' }
+    if (-not $NoNameResolution) { Write-Host '    - LLMNR, NetBIOS and mDNS name resolution off' }
     if (-not $NoNtlm) { Write-Host '    - NTLMv2 only, no LM hash' }
     if (-not $NoFirewall) { Write-Host '    - all firewall profiles on, inbound denied by default' }
     if (-not $NoPowerShellLogging) { Write-Host '    - PowerShell script-block and module logging' }

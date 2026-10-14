@@ -57,6 +57,7 @@ $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 $srv = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
 $wdigest = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $dnsPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient'
+$dnscache = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters'
 $sbl = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
 $rdp = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
 $explorerPol = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -76,6 +77,12 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path $dnsPol -Name EnableMulticast -Value 1 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue $dnsPol EnableMulticast) -eq 1 }
        Desc   = 'LLMNR stays enabled' }
+    # mDNS is the same step and the same switch, but its own knob: a second
+    # row, so the skip AND the repair are each proven for it on their own.
+    @{ Switch = 'NoNameResolution'
+       Plant  = { New-ItemProperty -Path $dnscache -Name EnableMDNS -Value 1 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue $dnscache EnableMDNS) -eq 1 }
+       Desc   = 'mDNS stays enabled' }
     @{ Switch = 'NoNtlm'
        Plant  = { New-ItemProperty -Path $lsa -Name LmCompatibilityLevel -Value 1 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue $lsa LmCompatibilityLevel) -eq 1 }

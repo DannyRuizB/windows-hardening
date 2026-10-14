@@ -64,7 +64,7 @@ Write-Host '== WDigest (cleartext credentials in LSASS) ==' -ForegroundColor Whi
 Test-RegEquals 'WDigest will not cache cleartext credentials' `
     'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' 'UseLogonCredential' 0
 
-Write-Host '== Name-resolution poisoning (LLMNR + NetBIOS) ==' -ForegroundColor White
+Write-Host '== Name-resolution poisoning (LLMNR + NetBIOS + mDNS) ==' -ForegroundColor White
 Test-RegEquals 'LLMNR is disabled by policy' `
     'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast' 0
 # Every interface, not just one: NetBIOS is per adapter, and one adapter
@@ -77,6 +77,9 @@ foreach ($iface in (Get-ChildItem -LiteralPath $ifBase -ErrorAction SilentlyCont
 }
 if ($bad.Count -eq 0) { Pass 'NetBIOS over TCP/IP is disabled on every interface' }
 else { Fail "NetBIOS still enabled on: $($bad -join ', ')" }
+# The LLMNR policy does not cover mDNS: its own knob, absent = on.
+Test-RegEquals 'mDNS is disabled (DNS Client EnableMDNS)' `
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' 'EnableMDNS' 0
 
 Write-Host '== NTLM policy ==' -ForegroundColor White
 Test-RegEquals 'Only NTLMv2 is accepted' 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LmCompatibilityLevel' 5
