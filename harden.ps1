@@ -349,8 +349,10 @@ function Disable-NameResolutionPoisoning {
     # Windows the DNS Client service speaks it natively, and the
     # LLMNR policy above does NOT switch it off - EnableMulticast is LLMNR
     # only. EnableMDNS = 0 under the Dnscache parameters does; absent means
-    # ON. The DNS Client reads it when it starts and cannot be restarted by
-    # hand on current Windows, so it takes effect at the next boot.
+    # ON. Measured on the runner: EnableMDNS absent and Dnscache listening
+    # on UDP 5353 on 0.0.0.0 and ::. The DNS Client reads the value when it
+    # starts, and Restart-Service Dnscache is refused ("Cannot open Dnscache
+    # service") - so it takes effect at the next boot, like NetBIOS.
     if (Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' `
             -Name 'EnableMDNS' -Value 0 -Because 'mDNS off') {
         $Script:RebootNeeded += 'mDNS (EnableMDNS is read when the DNS Client starts)'
