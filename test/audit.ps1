@@ -107,6 +107,9 @@ foreach ($iface in (Get-ChildItem -LiteralPath $ifBase -ErrorAction SilentlyCont
 }
 if ($loose.Count -eq 0) { P 'NetBIOS over TCP/IP disabled on every interface' }
 else { F "NetBIOS still enabled on $($loose.Count) interface(s)" 'run harden.ps1 (name-resolution step)' }
+if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' 'EnableMDNS') -eq 0) {
+    P 'mDNS is disabled (the third protocol Responder poisons)'
+} else { F 'mDNS is enabled (EnableMDNS absent or not 0 - the LLMNR policy does not cover it)' 'run harden.ps1 (name-resolution step); takes effect at the next boot' }
 
 Write-Host '-- Firewall --------------------------------------------------'
 foreach ($name in @('Domain', 'Private', 'Public')) {

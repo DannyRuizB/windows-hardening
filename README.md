@@ -32,7 +32,7 @@ run reports **0**.
 |---|---|
 | **SMB signing** | Signs every SMB session, server *and* client. An **unsigned** SMB session is what makes NTLM relay work: the attacker sits in the middle, forwards the victim's authentication to a third host and lands a session there. Every relay tutorial starts by checking whether signing is required — measured on the CI runner, it was **not**. |
 | **WDigest** | Pins `UseLogonCredential = 0` so LSASS stops keeping **cleartext passwords in memory** for a 2008-era protocol. This single value is the difference between a credential dump handing over passwords and handing over hashes. Windows 8.1+ defaults to off, but on a fresh box the value is **absent** — and absent means "whatever this build decided", which a GPO or an application can flip back. |
-| **LLMNR + NetBIOS** | Both protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs neither. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — all five interfaces on the runner shipped `0`. |
+| **LLMNR + NetBIOS + mDNS** | All three protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs none of them. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — all five interfaces on the runner shipped `0`. **mDNS** (UDP 5353, spoken natively by the DNS Client on current Windows) is **not** covered by the LLMNR policy — `EnableMulticast` is LLMNR only — so it gets its own knob, `Dnscache\Parameters\EnableMDNS = 0` (absent = on). **Measured** on the runner: `EnableMDNS` absent and the DNS Client listening on UDP 5353 on `0.0.0.0` and `::`. The service reads the value at start and `Restart-Service Dnscache` is refused, so it applies at the next boot (like NetBIOS); the CI annotates the 5353 listeners before and after. |
 | **NTLM policy** | `LmCompatibilityLevel = 5` (NTLMv2 only, refuse LM and NTLMv1) plus `NoLMHash = 1`. An LM hash has no salt, uppercases the password and splits it into two 7-byte halves — it falls to brute force in minutes. |
 | **Firewall posture** | All three profiles enabled with an **explicit inbound `Block`** and dropped-packet logging. Measured: the profiles were on but their default inbound action was `NotConfigured` — and "not configured" is not a policy, it means the answer comes from elsewhere and can change without anyone touching this machine. |
 | **PowerShell logging** | Script-block (event **4104**) and module logging. An attacker's PowerShell never has to touch disk: it arrives over the network and runs from memory, so file-based forensics find nothing. Script-block logging records the code **after** any decoding or de-obfuscation. Both keys were absent on the runner: no logging at all. |
@@ -198,14 +198,14 @@ obeyed.
 
 ## Status
 
-Early but honest: 30 steps, 99 verify checks (sixteen of them behavioural), a scored
+Early but honest: 30 steps, 100 verify checks (sixteen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 65 PASS, 2 WARN, 0 FAIL  ->  99% compliant
+ Score: 66 PASS, 2 WARN, 0 FAIL  ->  99% compliant
 ```
 
 **Not 100%, on purpose.** The two warnings are the controls this baseline

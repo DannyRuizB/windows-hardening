@@ -82,6 +82,12 @@ jobs:
           # that a fresh standard user can read. The probe must say EXPOSED here,
           # or its NONE after hardening would prove nothing. (Length only, never the value.)
           foreach ($fam in 'IPv4', 'IPv6') { $pr = & "Get-Net${fam}Protocol"; "$fam as shipped: IcmpRedirects=$($pr.IcmpRedirects) SourceRoutingBehavior=$($pr.SourceRoutingBehavior)" }
+          # Step 3 (mDNS): the knob as shipped, and who actually listens on
+          # UDP 5353 - the exposure the LLMNR policy does not cover.
+          $mdns = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name EnableMDNS -ErrorAction SilentlyContinue).EnableMDNS
+          $l5353 = @(Get-NetUDPEndpoint -LocalPort 5353 -ErrorAction SilentlyContinue)
+          # ::notice:: so the measurement shows in the run summary, not only the log.
+          "::notice title=mDNS as shipped::EnableMDNS=$(if ($null -eq $mdns) { '<absent> (= on)' } else { $mdns }); UDP 5353 listeners: $($l5353.Count) - " + (($l5353 | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess) [$((Get-CimInstance Win32_Service -Filter "ProcessId=$($_.OwningProcess)" | Select-Object -ExpandProperty Name) -join ',')]" }) -join '; ')
           $wlp = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
           "autologon as shipped: AutoAdminLogon=$($wlp.PSObject.Properties['AutoAdminLogon'].Value) DefaultPassword present=$($null -ne $wlp.PSObject.Properties['DefaultPassword'])"
           $aalShipped = .\test\autologon-probe.ps1
@@ -273,6 +279,22 @@ jobs:
       - name: Verify every promise
         shell: powershell
         run: .\test\verify.ps1
+
+      # Informational, never a gate: EnableMDNS is read when the DNS Client
+      # starts, so the registry pin is what verify can promise. This prints
+      # what the listener does now, and whether a manual restart of the DNS
+      # Client is even allowed on this image (and what 5353 looks like after).
+      - name: "mDNS after hardening (informational)"
+        shell: powershell
+        run: |
+          function Show5353([string]$when) {
+            $l = @(Get-NetUDPEndpoint -LocalPort 5353 -ErrorAction SilentlyContinue)
+            "::notice title=mDNS ${when}::UDP 5353 listeners: $($l.Count) - " + (($l | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess)" }) -join '; ')
+          }
+          Show5353 'after hardening'
+          try { Restart-Service Dnscache -Force -ErrorAction Stop; '::notice title=mDNS::Restart-Service Dnscache allowed'; Start-Sleep 3; Show5353 'after a DNS Client restart' }
+          catch { "::notice title=mDNS::Restart-Service Dnscache refused - $($_.Exception.Message)" }
+          $global:LASTEXITCODE = 0
 
       - name: Score the box
         shell: powershell
