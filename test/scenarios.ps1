@@ -141,8 +141,13 @@ $scenarios = @(
     # Application, not Security: the Security channel refuses to go below
     # 20 MB (measured on the runner), so a shrink there proves nothing.
     @{ Switch = 'NoEventLogSize'
-       Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Application' -Recurse -Force -ErrorAction SilentlyContinue; & wevtutil.exe sl Application /ms:1052672 | Out-Null }
+       Plant  = { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Application' -Recurse -Force -ErrorAction SilentlyContinue
+                  $out = & wevtutil.exe sl Application /ms:1052672 2>&1
+                  if ($LASTEXITCODE -ne 0) { Write-Host "    wevtutil sl exit $LASTEXITCODE`: $out" } }
        Probe  = { [int64](Get-WinEvent -ListLog Application).MaximumSizeInBytes -lt (32768 * 1024) }
+       State  = { $l = Get-WinEvent -ListLog Application
+                  $pin = Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Application' MaxSize
+                  "Application max $($l.MaximumSizeInBytes), file $($l.FileSize), policy MaxSize '$pin', EventLog service $((Get-Service EventLog).Status)" }
        Desc   = 'the shrunken Application log (1 MB) survives' }
     @{ Switch = 'NoFirewallLogging'
        Plant  = { Set-NetFirewallProfile -Name Public -LogBlocked False -LogAllowed False -LogMaxSizeKilobytes 4096 }
@@ -215,11 +220,25 @@ Write-Host ''
 Write-Host '=== -No* switch scenarios (one per step) ===' -ForegroundColor White
 foreach ($s in $scenarios) {
     Write-Host "-- -$($s.Switch) --" -ForegroundColor White
-    & $s.Plant
-    if (-not (& $s.Probe)) {
-        Fail "-$($s.Switch): the offender could not even be planted"
+    # A plant that does not take is noise about the TEST, not a verdict on
+    # the switch - but it must never be silent. The -NoEventLogSize plant
+    # failed once on 08/10 and passed on the rerun; two causes were measured
+    # on the runner and ruled out (a race with removing the policy pin: 40 of
+    # 40 shrinks landed at once; a log file over 1 MB: 5 of 5 landed). So the
+    # plant gets three tries, says when it needed more than one, and a plant
+    # that never takes prints the scenario's State before failing.
+    $planted = $false
+    for ($try = 1; $try -le 3 -and -not $planted; $try++) {
+        if ($try -gt 1) { Start-Sleep -Seconds 2 }
+        & $s.Plant
+        $planted = [bool](& $s.Probe)
+    }
+    if (-not $planted) {
+        if ($s.ContainsKey('State')) { Write-Host "    state: $(& $s.State)" }
+        Fail "-$($s.Switch): the offender could not even be planted (3 tries)"
         continue
     }
+    if ($try -gt 2) { Write-Host "    planted on try $($try - 1) of 3" -ForegroundColor Yellow }
     $args = @{ Yes = $true; $($s.Switch) = $true }
     & $HardenScript @args | Out-Null
     if (& $s.Probe) { Pass "-$($s.Switch): $($s.Desc) (step skipped)" }
