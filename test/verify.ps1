@@ -599,6 +599,20 @@ elseif ($wr.Result -eq 'NOT-RUNNING') { Pass 'WinRM is not running - nothing lis
 elseif ($wr.Result -eq 'ACCEPTED') { Fail "a WinRM listener still takes a password in a Basic header: $($wr.Detail)" }
 else { Fail "the WinRM probe did not run: $($wr.Detail)" }
 
+Write-Host '== WinRM: no stored RunAs credentials ==' -ForegroundColor White
+Test-RegEquals 'WinRM refuses to store RunAs credentials by policy' `
+    'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' 'DisableRunAs' 1
+# Behavioural: before hardening the same probe registered a RunAs endpoint
+# for a throwaway administrator and a Remote Management Users member ran as
+# that administrator through it (the e2e requires ESCALATES there); now
+# registering one must be refused by the policy.
+$ra = & (Join-Path $PSScriptRoot 'winrm-runas-probe.ps1')
+Write-Host "        RunAs probe: $($ra.Result) - $($ra.Detail)"
+if ($ra.Result -eq 'REFUSED') { Pass 'a RunAs endpoint cannot even be registered, so no caller runs as a stored administrator' }
+elseif ($ra.Result -eq 'NOT-RUNNING') { Pass 'WinRM is not running - no endpoint to run anyone as anybody (the policy above holds the day it starts)' }
+elseif ($ra.Result -eq 'ESCALATES') { Fail "a Remote Management Users member still runs as an administrator through a RunAs endpoint: $($ra.Detail)" }
+else { Fail "the RunAs probe did not run: $($ra.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red

@@ -413,6 +413,10 @@ if ("$((Get-Service -Name WinRM -ErrorAction SilentlyContinue).Status)" -eq 'Run
 if ($wrOpen.Count -eq 0) { P 'WinRM refuses Basic and unencrypted traffic by policy (service and client)' }
 elseif ($wrBasic -eq 'true' -and $wrPlain -eq 'true') { F 'the WinRM service takes Basic over unencrypted HTTP - passwords cross the wire as base64' 'run harden.ps1 (WinRM step)' }
 else { W "WinRM is not held to Negotiate over an encrypted channel (no policy for $($wrOpen -join ', ')$(if ($wrBasic -eq 'true') { '; the service accepts Basic' }))" 'run harden.ps1 (WinRM step)' }
+# Step 32: an endpoint registered with -RunAsCredential runs every caller as
+# that account - measured, a Remote Management Users member ran as the admin.
+if ((Get-Reg "$wrPol\Service" 'DisableRunAs') -eq 1) { P 'WinRM refuses to store RunAs credentials (DisableRunAs)' }
+else { W 'WinRM may store RunAs credentials: an endpoint can run its callers as an account whose password it keeps' 'run harden.ps1 (WinRM RunAs step), or use JEA with RunAsVirtualAccount' }
 
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
