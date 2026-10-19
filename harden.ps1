@@ -140,6 +140,15 @@
          image: AutoAdminLogon 1 and a 44-character administrator password
          there, which a freshly created standard user read. AutoAdminLogon
          goes to 0 and DefaultPassword is removed.
+     31. WinRM without Basic authentication or unencrypted traffic, service
+         and client: Basic hands the account's actual password to whatever
+         endpoint answers, and with unencrypted traffic allowed it crosses
+         the wire as base64. Measured on the runner image: Basic ON in the
+         service with an HTTPS listener on every address - the right
+         password in a Basic header was accepted on 5986. Set by policy,
+         which also locks the local config; the running service only reads
+         it at start (measured), so WinRM is restarted - unless this run came
+         in over WinRM, where that would cut the caller off.
 
 .PARAMETER BannerCaption
     Title of the logon banner (step 28). Default: 'Authorized use only'.
@@ -197,6 +206,7 @@ param(
     [switch]$NoLogonBanner,
     [switch]$NoIcmpRedirects,
     [switch]$NoAutologon,
+    [switch]$NoWinRm,
     [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
     [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
         'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
@@ -1306,6 +1316,52 @@ function Disable-Autologon {
     Write-Ok 'No password sits in the registry for anyone to read'
 }
 
+# ---- Step 31: WinRM without Basic or unencrypted traffic -------------------
+
+function Set-WinRmAuthentication {
+    if ($NoWinRm) { Write-Skip 'Skipping WinRM authentication posture'; return }
+    Write-Step 'Refusing Basic authentication and unencrypted traffic in WinRM (service and client)'
+    # WinRM is the remote administration channel this baseline keeps (step
+    # 11 retires RemoteRegistry in its favour), so how it authenticates is
+    # the whole question. Basic sends the account's actual password to
+    # whatever answers - base64, not a hash - and with AllowUnencrypted it
+    # crosses the wire that way too. Negotiate/Kerberos never send the
+    # password at all, and stay. CIS 18.10.89.1.1/1.2 (client) and
+    # 18.10.89.2.1/2.3 (service).
+    #
+    # Measured on the runner (Server 2025, via a probe branch): WinRM running
+    # with HTTP 5985 AND HTTPS 5986 listeners on every address, and
+    # Service\Auth\Basic = true as shipped - a raw POST to 5986/wsman with
+    # the right password in a Basic header was authenticated (HTTP 500 for
+    # the empty envelope; 401 with a wrong one). With AllowUnencrypted
+    # planted, Invoke-Command -Authentication Basic got in over plain HTTP.
+    #
+    # Policy, not Set-Item WSMan:\...: the policy also locks the local config
+    # ("cannot be changed because is controlled by policies", measured). And
+    # the measurement that decided the restart: WSMan:\ and `winrm get` show
+    # the policy at once, but the RUNNING service kept accepting Basic over
+    # HTTP until Restart-Service WinRM. Restarting drops every open WinRM
+    # session, so a run that came in over WinRM leaves it for the operator.
+    $made = $false
+    foreach ($side in 'Service', 'Client') {
+        $p = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\$side"
+        if (Set-RegistryValue -Path $p -Name 'AllowBasic' -Value 0 `
+                -Because "WinRM $($side.ToLower()) never takes or sends a password in a Basic header") { $made = $true }
+        if (Set-RegistryValue -Path $p -Name 'AllowUnencryptedTraffic' -Value 0 `
+                -Because "WinRM $($side.ToLower()) never speaks unencrypted") { $made = $true }
+    }
+    $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
+    if ($made -and $svc -and $svc.Status -eq 'Running') {
+        if (Get-Variable -Name PSSenderInfo -ErrorAction SilentlyContinue) {
+            $Script:RebootNeeded += 'WinRM (the running service reads the policy at start; this run came in over WinRM, so it was not restarted under you - Restart-Service WinRM from a console)'
+        } else {
+            Restart-Service -Name WinRM
+            Write-Warn2 'restarted WinRM: the running service only reads the policy at start'
+        }
+    }
+    Write-Ok 'WinRM authenticates with Negotiate/Kerberos only, and only over an encrypted channel'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1345,6 +1401,7 @@ function Invoke-Main {
     if (-not $NoLogonBanner) { Write-Host "    - logon banner: '$BannerCaption' shown before the credential prompt" }
     if (-not $NoIcmpRedirects) { Write-Host '    - ICMP redirects refused and source-routed packets dropped (IPv4 and IPv6)' }
     if (-not $NoAutologon) { Write-Host '    - automatic logon off, its cleartext password removed from the registry' }
+    if (-not $NoWinRm) { Write-Host '    - WinRM: no Basic authentication, no unencrypted traffic (service and client)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1382,6 +1439,7 @@ function Invoke-Main {
     Set-LogonBanner
     Set-IcmpRedirectPolicy
     Disable-Autologon
+    Set-WinRmAuthentication
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

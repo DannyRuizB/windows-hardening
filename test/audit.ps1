@@ -393,6 +393,27 @@ if ($null -ne $dpProp -and "$($dpProp.Value)" -ne '') { F "an autologon password
 elseif ("$aalVal" -eq '1') { W 'automatic logon is on (AutoAdminLogon = 1), with no password in the registry' 'run harden.ps1 (automatic logon step), or keep it only on a kiosk via Sysinternals Autologon' }
 else { P 'automatic logon is off and no password sits in the registry' }
 
+Write-Host '-- WinRM authentication --------------------------------------'
+# Basic hands the account's password to whatever answers (base64, not a hash),
+# and with unencrypted traffic allowed it crosses the wire that way (step 31).
+# Measured: the runner image ships Basic ON in the service.
+$wrPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM'
+$wrOpen = @()
+foreach ($side in 'Service', 'Client') {
+    foreach ($n in 'AllowBasic', 'AllowUnencryptedTraffic') {
+        if ((Get-Reg "$wrPol\$side" $n) -ne 0) { $wrOpen += "$side\$n" }
+    }
+}
+$wrBasic = ''
+$wrPlain = ''
+if ("$((Get-Service -Name WinRM -ErrorAction SilentlyContinue).Status)" -eq 'Running') {
+    $wrBasic = "$((Get-Item WSMan:\localhost\Service\Auth\Basic -ErrorAction SilentlyContinue).Value)"
+    $wrPlain = "$((Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value)"
+}
+if ($wrOpen.Count -eq 0) { P 'WinRM refuses Basic and unencrypted traffic by policy (service and client)' }
+elseif ($wrBasic -eq 'true' -and $wrPlain -eq 'true') { F 'the WinRM service takes Basic over unencrypted HTTP - passwords cross the wire as base64' 'run harden.ps1 (WinRM step)' }
+else { W "WinRM is not held to Negotiate over an encrypted channel (no policy for $($wrOpen -join ', ')$(if ($wrBasic -eq 'true') { '; the service accepts Basic' }))" 'run harden.ps1 (WinRM step)' }
+
 Write-Host '-- UAC -------------------------------------------------------'
 # Out of the baseline ON PURPOSE, and the audit says why: raising the admin
 # consent prompt on a machine with no interactive session (a CI runner, an

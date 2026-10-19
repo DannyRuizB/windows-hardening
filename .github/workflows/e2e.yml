@@ -94,6 +94,13 @@ jobs:
           "autologon probe as shipped: $($aalShipped.Result) - $($aalShipped.Detail)"
           if ($aalShipped.Result -ne 'EXPOSED') { throw "a standard user cannot read an autologon password even as shipped ($($aalShipped.Result)) - the NONE after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
+          # Step 31, measured: WinRM running with HTTP and HTTPS listeners and
+          # Basic ON in the service. Informational here (the plant step below
+          # makes it a hard precondition): what the image takes as shipped.
+          "WinRM as shipped: service $((Get-Service WinRM).Status), Basic=$((Get-Item WSMan:\localhost\Service\Auth\Basic).Value) AllowUnencrypted=$((Get-Item WSMan:\localhost\Service\AllowUnencrypted).Value)"
+          $wrShipped = .\test\winrm-probe.ps1
+          "::notice title=WinRM as shipped::$($wrShipped.Result) - $($wrShipped.Detail)"
+          $global:LASTEXITCODE = 0
 
       # Most offenders here are NATURAL: the runner ships SMB signing off,
       # LLMNR/NetBIOS enabled, no PowerShell logging, password length 0. Two
@@ -209,6 +216,21 @@ jobs:
           # 14 provably pin it back; verify asserts the other two doors absent.
           New-ItemProperty -Path $srv -Name SMB1 -Value 1 -PropertyType DWord -Force | Out-Null
           "planted LanmanServer\Parameters\SMB1=1 (effective EnableSMB1Protocol reads $((Get-SmbServerConfiguration).EnableSMB1Protocol))"
+          # Step 31 offender: the image ships Basic ON in the WinRM service
+          # (measured), with AllowUnencrypted off - so plant the other half,
+          # unencrypted traffic on both sides, and the SAME probe verify runs
+          # must find the right password taken on BOTH listeners (HTTP and
+          # HTTPS), or its later REFUSED would prove nothing.
+          Set-Item WSMan:\localhost\Service\Auth\Basic $true
+          Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
+          Set-Item WSMan:\localhost\Client\Auth\Basic $true
+          Set-Item WSMan:\localhost\Client\AllowUnencrypted $true
+          $wide = .\test\winrm-probe.ps1
+          "planted WinRM Basic + AllowUnencrypted (service and client); probe: $($wide.Result) - $($wide.Detail)"
+          if ($wide.Result -ne 'ACCEPTED' -or $wide.Detail -notmatch 'HTTP 5985' -or $wide.Detail -notmatch 'HTTPS 5986') {
+            throw "WinRM did not take the password in a Basic header on both listeners ($($wide.Result)) - its REFUSED after hardening would prove nothing"
+          }
+          $global:LASTEXITCODE = 0
 
       - name: Dry run changes nothing
         shell: powershell
