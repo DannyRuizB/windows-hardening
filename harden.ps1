@@ -1,7 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Baseline security hardening for Windows Server / Windows 10-11.
+    Baseline security hardening for Windows Server (drilled in CI on Server
+    2025 and 2022; the controls exist on Windows 10/11, which no CI runner
+    offers, so they are not claimed there by measurement).
 
 .DESCRIPTION
     One idempotent script that applies a defensible baseline and reports

@@ -3,11 +3,13 @@
 [![lint](https://github.com/DannyRuizB/windows-hardening/actions/workflows/lint.yml/badge.svg)](https://github.com/DannyRuizB/windows-hardening/actions/workflows/lint.yml)
 [![e2e](https://github.com/DannyRuizB/windows-hardening/actions/workflows/e2e.yml/badge.svg)](https://github.com/DannyRuizB/windows-hardening/actions/workflows/e2e.yml)
 
-A **baseline security hardening script for Windows Server / Windows 10-11**, in
-PowerShell — with a harness that proves it. CI takes a disposable Windows Server
-runner, **hardens it for real**, runs the script again to prove idempotence,
-verifies every promise (including behavioural proofs) and scores the box
-against a CIS-style checklist.
+A **baseline security hardening script for Windows Server**, in PowerShell —
+with a harness that proves it. CI takes disposable **Windows Server 2025 and
+2022** runners, **hardens them for real**, runs the script again to prove
+idempotence, verifies every promise (including behavioural proofs) and scores
+each box against a CIS-style checklist. Both versions give the same numbers.
+The controls exist on Windows 10/11 too, but no CI runner offers a client SKU,
+so nothing here is claimed for them by measurement.
 
 Sibling of [debian-hardening](https://github.com/DannyRuizB/debian-hardening)
 (Bash) and [debian-hardening-ansible](https://github.com/DannyRuizB/debian-hardening-ansible)
@@ -83,6 +85,11 @@ so they stay visible, but the script never applies them silently:
 
 The CI does what a reviewer would want to see done:
 
+0. Runs on **two** disposable servers, **Windows Server 2025 and 2022**
+   (`windows-2025`, `windows-2022`), every step below on each. The README once
+   said *Windows Server / Windows 10-11* while only 2025 ran; 2022 was added
+   and passed as it stood — the same 76 changes, 107 verify checks and
+   68/2/0 score. A client SKU (10/11) is not on offer, so it is not claimed.
 1. **Prints the starting posture** — the weak values are in the log, so the
    "after" means something.
 2. **Plants the offenders that would otherwise be tautological.** Most are
