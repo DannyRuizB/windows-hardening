@@ -214,6 +214,11 @@ $scenarios = @(
        Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' DontDisplayLastUserName) -ne 1 -or
                   (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' InactivityTimeoutSecs) -ne 900 }
        Desc   = 'the logon screen still names the last user and the console never auto-locks (the planted 0 / absent)' }
+    @{ Switch = 'NoWinRm'
+       Plant  = { foreach ($side in 'Service', 'Client') {
+                      New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\$side" -Name AllowBasic -Value 1 -PropertyType DWord -Force | Out-Null } }
+       Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' AllowBasic) -ne 0 }
+       Desc   = 'the WinRM policy keeps allowing Basic (the planted 1)' }
 )
 
 Write-Host ''

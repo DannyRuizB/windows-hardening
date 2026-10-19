@@ -60,6 +60,7 @@ run reports **0**.
 | **Logon banner** | CIS 2.3.7.4 / 2.3.7.5. `LegalNoticeCaption` + `LegalNoticeText` make Winlogon show a warning **before the credential prompt** — on the console and over RDP — that the user has to acknowledge. It stops no attacker by itself; its job is the paper trail: someone told *authorized use only, activity is monitored* cannot later claim the box looked open, and many policies and audits require it. The Windows face of the Linux twins' `/etc/issue` step. **Measured** on the runner (Server 2025, via a probe branch): the caption ships as an **empty string** and the text as **a single NUL character** — no banner. That NUL is the trap: the text is *present* and has length 1, so a naive "is it set" check passes on the factory value; `audit.ps1` and `verify.ps1` strip NULs and whitespace before calling it set. The wording is yours: `-BannerCaption` / `-BannerText` (the default is a short authorized-use and monitoring notice — have legal word the real one). State-verified: seeing the banner needs a real interactive logon, which a headless runner does not have. The CI **plants** a blank caption and text and requires one run to repair them. `-NoLogonBanner` to skip. |
 | **ICMP redirects and source routing** | An ICMP redirect is a router saying *use that gateway instead* — and anyone on the segment can send one, a way to pull this box's traffic through an attacker without touching ARP; source routing lets the **sender** pick the path. Both stacks stop accepting redirects and **drop** source-routed packets (`IcmpRedirects = Disabled`, `SourceRoutingBehavior = Drop`, IPv4 and IPv6) — the Windows face of the Linux twins' `accept_redirects` / `accept_source_route`. **Measured** on the runner (Server 2025, probe branch): redirects **enabled** and source routing at `DontForward` on both. And the finding that decided *how*: the MSS registry values the old baselines set (`Tcpip\Parameters` `EnableICMPRedirect = 0`, `DisableIPSourceRouting = 2`) did **not** change the running stack — `netsh int ipv4 show global` still said *enabled* after writing them, and netsh does not write them either — so the step uses `Set-NetIPv4Protocol` / `Set-NetIPv6Protocol`, measured to change the live stack **and** its persistent store, and `verify.ps1` reads the live values back. The CI plants the shipped values for the scenario. `-NoIcmpRedirects` to skip. |
 | **Automatic logon** | With `AutoAdminLogon = 1` the account's password sits in `Winlogon\DefaultPassword` **in plain text**, in a key every local user can read (CIS 18.4.1). **Measured** on the GitHub runner image: `AutoAdminLogon = 1`, `ForceAutoLogon = 1`, `DefaultUserName` = the runner's administrator and a **44-character `DefaultPassword`** — and a freshly created member of *Users*, reading through its own token, got it (`test/autologon-probe.ps1`: `LogonUser` + impersonation, step 22's technique; it reports the length, never the value). The step sets `AutoAdminLogon = 0` and **deletes** `DefaultPassword`. **Behavioural proof**: the e2e requires the probe to say **EXPOSED** on the box as shipped before `verify.ps1` demands **NONE**. Not touched, said out loud: an LSA-secret copy of the password (where Sysinternals Autologon keeps it — the runner has one) is SYSTEM-only and unused once autologon is off; remove it with `Autologon /delete`. And change the exposed account's password — anyone could already have read it. `-NoAutologon` to skip. |
+| **WinRM: no Basic, no unencrypted traffic** | CIS 18.10.89.1.1/1.2 (client) and 18.10.89.2.1/2.3 (service). WinRM is the administration channel this baseline *keeps* — step 11 retires RemoteRegistry in its favour — so how it authenticates is the whole question. **Basic** puts the account's actual password in a header, base64 and not a hash, for whatever endpoint answers; with **unencrypted traffic** allowed it crosses the wire that way. Negotiate/Kerberos never send the password, and stay. **Measured** on the runner: WinRM running with HTTP 5985 *and* HTTPS 5986 listeners on every address, and **`Service\Auth\Basic = true` as shipped** — a raw POST to `5986/wsman` with the right password in a Basic header was authenticated (HTTP 500 for the empty envelope, 401 with a wrong one); with `AllowUnencrypted` planted, `Invoke-Command -Authentication Basic` got in over plain HTTP. Set by **policy** (`AllowBasic = 0`, `AllowUnencryptedTraffic = 0` on both sides), which also locks the local config — `Set-Item WSMan:\…` is refused afterwards (measured). **The trap that decided the restart**: `WSMan:\` and `winrm get` show the policy at once (`[Source="GPO"]`), but the **running service kept taking Basic over HTTP** until `Restart-Service WinRM` — so the step restarts it, unless the run itself came in over WinRM (`$PSSenderInfo`), where that would cut the caller off and it is left to the operator. **Behavioural proof** (`test/winrm-probe.ps1`): a throwaway local administrator's right password in a Basic header must get **401 on every listener**, and the same account must still get in with Negotiate — the e2e first requires the same probe to see the password **taken on both** listeners after planting. `-NoWinRm` to skip. |
 
 ### Deliberately *not* in the baseline
 
@@ -114,7 +115,11 @@ The CI does what a reviewer would want to see done:
    - a throwaway **non-admin** with a network logon, calling SAMR at the
      box's own IPv4, must be refused the local accounts — the same probe
      that, before hardening, must list them against a planted Everyone
-     descriptor.
+     descriptor;
+   - a throwaway **local administrator** puts its right password in a Basic
+     header to every WinRM listener (HTTP 5985 and HTTPS 5986): each must
+     answer 401, and the same account must still get in with Negotiate — the
+     same probe that, before hardening, must find the password taken on both.
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -198,14 +203,14 @@ obeyed.
 
 ## Status
 
-Early but honest: 30 steps, 100 verify checks (sixteen of them behavioural), a scored
+Early but honest: 31 steps, 105 verify checks (seventeen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 66 PASS, 2 WARN, 0 FAIL  ->  99% compliant
+ Score: 67 PASS, 2 WARN, 0 FAIL  ->  99% compliant
 ```
 
 **Not 100%, on purpose.** The two warnings are the controls this baseline

@@ -581,6 +581,24 @@ if ($aal.Result -eq 'NONE') { Pass 'a standard user finds no autologon password 
 elseif ($aal.Result -eq 'EXPOSED') { Fail "a standard user can still read an autologon password: $($aal.Detail)" }
 else { Fail "the autologon probe did not run: $($aal.Detail)" }
 
+Write-Host '== WinRM: no Basic, no unencrypted traffic ==' -ForegroundColor White
+foreach ($side in 'Service', 'Client') {
+    $wp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\$side"
+    Test-RegEquals "WinRM $($side.ToLower()) refuses Basic by policy" $wp 'AllowBasic' 0
+    Test-RegEquals "WinRM $($side.ToLower()) refuses unencrypted traffic by policy" $wp 'AllowUnencryptedTraffic' 0
+}
+# Behavioural, because the policy is not the service: measured, WSMan:\ shows
+# the policy at once while the running service still took Basic until it was
+# restarted. As shipped the runner's HTTPS listener authenticated the right
+# password in a Basic header; now every listener must refuse it, and
+# Negotiate must still get in.
+$wr = & (Join-Path $PSScriptRoot 'winrm-probe.ps1')
+Write-Host "        WinRM probe: $($wr.Result) - $($wr.Detail)"
+if ($wr.Result -eq 'REFUSED') { Pass 'no WinRM listener takes a password in a Basic header, and Negotiate still gets in' }
+elseif ($wr.Result -eq 'NOT-RUNNING') { Pass 'WinRM is not running - nothing listens to take a Basic header (the policy above holds the day it starts)' }
+elseif ($wr.Result -eq 'ACCEPTED') { Fail "a WinRM listener still takes a password in a Basic header: $($wr.Detail)" }
+else { Fail "the WinRM probe did not run: $($wr.Detail)" }
+
 Write-Host ''
 if ($Script:Failures -gt 0) {
     Write-Host "$Script:Failures check(s) FAILED" -ForegroundColor Red
