@@ -149,6 +149,14 @@
          which also locks the local config; the running service only reads
          it at start (measured), so WinRM is restarted - unless this run came
          in over WinRM, where that would cut the caller off.
+     32. WinRM keeps no RunAs passwords (DisableRunAs): a session
+         configuration registered with -RunAsCredential runs every caller as
+         that account. Measured on the runner: by default a member of Remote
+         Management Users may connect to one, and ran as its administrator.
+         With the policy that endpoint and any new one are refused, while a
+         JEA endpoint with a virtual account keeps working. One-way for the
+         existing ones (removing the policy did not bring them back), so the
+         step names each before applying.
 
 .PARAMETER BannerCaption
     Title of the logon banner (step 28). Default: 'Authorized use only'.
@@ -207,6 +215,7 @@ param(
     [switch]$NoIcmpRedirects,
     [switch]$NoAutologon,
     [switch]$NoWinRm,
+    [switch]$NoWinRmRunAs,
     [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
     [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
         'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
@@ -224,6 +233,9 @@ $Script:ChangeCount = 0
 # Steps that need a reboot before the kernel/LSA picks them up. Reported at
 # the end instead of silently pretending the box is already there.
 $Script:RebootNeeded = @()
+# Steps 31-32 write WinRM policy, which the running service only reads at
+# start (measured): they raise this, and WinRM is restarted ONCE after both.
+$Script:WinRmPolicyChanged = $false
 
 function Write-Step { param([string]$Message) Write-Host "[*] $Message" -ForegroundColor Cyan }
 function Write-Ok { param([string]$Message) Write-Host "[+] $Message" -ForegroundColor Green }
@@ -1340,26 +1352,65 @@ function Set-WinRmAuthentication {
     # ("cannot be changed because is controlled by policies", measured). And
     # the measurement that decided the restart: WSMan:\ and `winrm get` show
     # the policy at once, but the RUNNING service kept accepting Basic over
-    # HTTP until Restart-Service WinRM. Restarting drops every open WinRM
-    # session, so a run that came in over WinRM leaves it for the operator.
-    $made = $false
+    # HTTP until Restart-Service WinRM - see Restart-WinRmForPolicy below.
     foreach ($side in 'Service', 'Client') {
         $p = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\$side"
         if (Set-RegistryValue -Path $p -Name 'AllowBasic' -Value 0 `
-                -Because "WinRM $($side.ToLower()) never takes or sends a password in a Basic header") { $made = $true }
+                -Because "WinRM $($side.ToLower()) never takes or sends a password in a Basic header") { $Script:WinRmPolicyChanged = $true }
         if (Set-RegistryValue -Path $p -Name 'AllowUnencryptedTraffic' -Value 0 `
-                -Because "WinRM $($side.ToLower()) never speaks unencrypted") { $made = $true }
-    }
-    $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
-    if ($made -and $svc -and $svc.Status -eq 'Running') {
-        if (Get-Variable -Name PSSenderInfo -ErrorAction SilentlyContinue) {
-            $Script:RebootNeeded += 'WinRM (the running service reads the policy at start; this run came in over WinRM, so it was not restarted under you - Restart-Service WinRM from a console)'
-        } else {
-            Restart-Service -Name WinRM
-            Write-Warn2 'restarted WinRM: the running service only reads the policy at start'
-        }
+                -Because "WinRM $($side.ToLower()) never speaks unencrypted") { $Script:WinRmPolicyChanged = $true }
     }
     Write-Ok 'WinRM authenticates with Negotiate/Kerberos only, and only over an encrypted channel'
+}
+
+# ---- Step 32: no stored RunAs credentials in WinRM -------------------------
+
+function Disable-WinRmRunAs {
+    if ($NoWinRmRunAs) { Write-Skip 'Skipping WinRM RunAs credential storage'; return }
+    Write-Step 'Refusing stored RunAs credentials in WinRM session configurations'
+    # A session configuration registered with -RunAsCredential runs every
+    # caller's commands as THAT account, with its password stored by WinRM.
+    # CIS 18.10.89.2.4 (DisableRunAs). Measured on the runner (Server 2025,
+    # via a probe branch): a new configuration's default permissions are
+    # INTERACTIVE, Administrators and Remote Management Users - so a member
+    # of Remote Management Users connecting to one that runs as an
+    # administrator ran as that administrator (whoami, IsInRole admin True).
+    # With DisableRunAs = 1 and WinRM restarted that endpoint is refused
+    # ("Verify that the RunAsPassword value is correctly configured ..."),
+    # registering a new one is refused, and a JEA endpoint with a VIRTUAL
+    # account (no stored password) keeps working.
+    #
+    # The part to say out loud: it is one-way for existing endpoints. With
+    # the policy removed again and WinRM restarted, the old endpoint stayed
+    # broken until its credential was given again (Set-PSSessionConfiguration
+    # -RunAsCredential) - so they are named here before anything changes.
+    foreach ($plugin in @(Get-ChildItem -Path WSMan:\localhost\Plugin -ErrorAction SilentlyContinue)) {
+        $user = "$((Get-Item -Path "WSMan:\localhost\Plugin\$($plugin.Name)\RunAsUser" -ErrorAction SilentlyContinue).Value)"
+        $virtual = "$((Get-Item -Path "WSMan:\localhost\Plugin\$($plugin.Name)\RunAsVirtualAccount" -ErrorAction SilentlyContinue).Value)"
+        if ($user -and $virtual -ne 'true') {
+            Write-Warn2 "session configuration '$($plugin.Name)' runs as $user with a STORED password - it stops working, and removing the policy later does not bring it back (give the credential again, or move it to JEA with RunAsVirtualAccount)"
+        }
+    }
+    if (Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' -Name 'DisableRunAs' -Value 1 `
+            -Because 'WinRM never stores or uses a RunAs password') { $Script:WinRmPolicyChanged = $true }
+    Write-Ok 'No WinRM endpoint runs callers as an account whose password WinRM keeps'
+}
+
+# Steps 31-32 changed WinRM policy: restart the service once, because the
+# running one keeps its old settings until it starts (measured in step 31).
+# Restarting drops every open WinRM session, so a run that came in over
+# WinRM ($PSSenderInfo, read with Get-Variable because of StrictMode) leaves
+# it for the operator.
+function Restart-WinRmForPolicy {
+    if (-not $Script:WinRmPolicyChanged) { return }
+    $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
+    if (-not $svc -or $svc.Status -ne 'Running') { return }
+    if (Get-Variable -Name PSSenderInfo -ErrorAction SilentlyContinue) {
+        $Script:RebootNeeded += 'WinRM (the running service reads its policy at start; this run came in over WinRM, so it was not restarted under you - Restart-Service WinRM from a console)'
+    } else {
+        Restart-Service -Name WinRM
+        Write-Warn2 'restarted WinRM: the running service only reads its policy at start'
+    }
 }
 
 # ---- Main ------------------------------------------------------------------
@@ -1402,6 +1453,7 @@ function Invoke-Main {
     if (-not $NoIcmpRedirects) { Write-Host '    - ICMP redirects refused and source-routed packets dropped (IPv4 and IPv6)' }
     if (-not $NoAutologon) { Write-Host '    - automatic logon off, its cleartext password removed from the registry' }
     if (-not $NoWinRm) { Write-Host '    - WinRM: no Basic authentication, no unencrypted traffic (service and client)' }
+    if (-not $NoWinRmRunAs) { Write-Host '    - WinRM: no stored RunAs credentials (endpoints that rely on them stop working)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1440,6 +1492,8 @@ function Invoke-Main {
     Set-IcmpRedirectPolicy
     Disable-Autologon
     Set-WinRmAuthentication
+    Disable-WinRmRunAs
+    Restart-WinRmForPolicy
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

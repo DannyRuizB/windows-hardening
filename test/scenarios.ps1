@@ -219,6 +219,10 @@ $scenarios = @(
                       New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\$side" -Name AllowBasic -Value 1 -PropertyType DWord -Force | Out-Null } }
        Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' AllowBasic) -ne 0 }
        Desc   = 'the WinRM policy keeps allowing Basic (the planted 1)' }
+    @{ Switch = 'NoWinRmRunAs'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' -Name DisableRunAs -Value 0 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' DisableRunAs) -ne 1 }
+       Desc   = 'WinRM may keep storing RunAs credentials (the planted 0)' }
 )
 
 Write-Host ''

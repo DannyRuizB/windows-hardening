@@ -231,6 +231,14 @@ jobs:
             throw "WinRM did not take the password in a Basic header on both listeners ($($wide.Result)) - its REFUSED after hardening would prove nothing"
           }
           $global:LASTEXITCODE = 0
+          # Step 32: nothing to plant - the image ships no DisableRunAs, so a
+          # RunAs endpoint works as shipped. The SAME probe verify runs must
+          # see a Remote Management Users member run as the administrator,
+          # or its REFUSED after hardening would prove nothing.
+          $ra = .\test\winrm-runas-probe.ps1
+          "RunAs endpoint before hardening: $($ra.Result) - $($ra.Detail)"
+          if ($ra.Result -ne 'ESCALATES') { throw "a RunAs endpoint did not run its caller as the administrator even as shipped ($($ra.Result)) - its REFUSED after hardening would prove nothing" }
+          $global:LASTEXITCODE = 0
 
       - name: Dry run changes nothing
         shell: powershell
