@@ -159,6 +159,14 @@
          JEA endpoint with a virtual account keeps working. One-way for the
          existing ones (removing the policy did not bring them back), so the
          step names each before applying.
+     33. PowerShell 2.0 engine removed: `powershell -Version 2` is the
+         downgrade past step 6 - the 2.0 engine predates script-block
+         logging. Measured on Server 2022 (which ships the engine and the
+         .NET 3.5 it needs): with logging on, a marker run by the default
+         engine landed in event 4104 and the same marker under -Version 2
+         did not. The optional feature is removed (no reboot, measured);
+         Server 2025 ships no 2.0 engine at all (-Version 2 runs the
+         current one), so there the step has nothing to do.
 
 .PARAMETER BannerCaption
     Title of the logon banner (step 28). Default: 'Authorized use only'.
@@ -218,6 +226,7 @@ param(
     [switch]$NoAutologon,
     [switch]$NoWinRm,
     [switch]$NoWinRmRunAs,
+    [switch]$NoPowerShellV2,
     [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
     [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
         'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
@@ -1415,6 +1424,51 @@ function Restart-WinRmForPolicy {
     }
 }
 
+# ---- Step 33: PowerShell 2.0 engine removed --------------------------------
+
+function Remove-PowerShellV2 {
+    if ($NoPowerShellV2) { Write-Skip 'Skipping PowerShell 2.0 engine removal'; return }
+    Write-Step 'Removing the PowerShell 2.0 engine (the downgrade past script-block logging)'
+    # Step 6 makes every script block land in event 4104 - for the engines
+    # that know how. The 2.0 engine predates script-block logging (and AMSI),
+    # and `powershell.exe -Version 2` still starts it wherever it is
+    # installed: the downgrade that walks past step 6. Measured on the Server
+    # 2022 runner (probe branch), which ships the feature together with the
+    # .NET 3.5 the engine needs: with script-block logging on, a marker run
+    # by the default engine landed in 4104 and the same marker run with
+    # -Version 2 did NOT. Removing the optional feature took 15 s and needed
+    # no reboot: right after it, -Version 2 is refused ("The Windows
+    # PowerShell 2 engine is not installed"). Server 2025 ships no such
+    # feature at all - there -Version 2 warns that 2.0 is deprecated and runs
+    # the current engine, which logs - so the step has nothing to remove.
+    # The DISM name is the engine itself on both Server and client Windows
+    # (on a client it sits under MicrosoftWindowsPowerShellV2Root); the same
+    # cmdlet family as the SMBv1 step.
+    $feature = $null
+    try {
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop
+    } catch {
+        $feature = $null
+    }
+    if ($null -eq $feature) {
+        Write-Ok 'This Windows has no PowerShell 2.0 engine (-Version 2 runs the current, logged engine)'
+        return
+    }
+    if ("$($feature.State)" -notin @('Enabled', 'EnablePending')) {
+        Write-Ok "PowerShell 2.0 engine is not installed ($($feature.State))"
+        return
+    }
+    if ($DryRun) {
+        Write-Warn2 "(dry-run) would remove the PowerShell 2.0 engine (MicrosoftWindowsPowerShellV2, currently $($feature.State))"
+        return
+    }
+    $result = Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -NoRestart -WarningAction SilentlyContinue
+    $Script:ChangeCount++
+    if ($result -and $result.RestartNeeded) { $Script:RebootNeeded += 'PowerShell 2.0 engine removal' }
+    Write-Warn2 "PowerShell 2.0 engine removed, was $($feature.State)"
+    Write-Ok 'powershell -Version 2 no longer starts an engine that script-block logging cannot see'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1456,6 +1510,7 @@ function Invoke-Main {
     if (-not $NoAutologon) { Write-Host '    - automatic logon off, its cleartext password removed from the registry' }
     if (-not $NoWinRm) { Write-Host '    - WinRM: no Basic authentication, no unencrypted traffic (service and client)' }
     if (-not $NoWinRmRunAs) { Write-Host '    - WinRM: no stored RunAs credentials (endpoints that rely on them stop working)' }
+    if (-not $NoPowerShellV2) { Write-Host '    - PowerShell 2.0 engine removed (no downgrade past script-block logging)' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1496,6 +1551,7 @@ function Invoke-Main {
     Set-WinRmAuthentication
     Disable-WinRmRunAs
     Restart-WinRmForPolicy
+    Remove-PowerShellV2
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable

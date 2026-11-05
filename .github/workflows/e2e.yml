@@ -243,6 +243,37 @@ jobs:
           "RunAs endpoint before hardening: $($ra.Result) - $($ra.Detail)"
           if ($ra.Result -ne 'ESCALATES') { throw "a RunAs endpoint did not run its caller as the administrator even as shipped ($($ra.Result)) - its REFUSED after hardening would prove nothing" }
           $global:LASTEXITCODE = 0
+          # Step 33: nothing to plant either - the image decides. Server 2022
+          # ships the 2.0 engine: the SAME probe verify runs must see it start
+          # and, with script-block logging switched on just for this check, see
+          # the default engine's marker land in 4104 and the 2.0 engine's NOT -
+          # the bypass itself, or its REFUSED after hardening would prove
+          # nothing. Server 2025 ships no 2.0 engine: there -Version 2 must run
+          # the current one. The logging policy goes back to how the image
+          # shipped it, so step 6 still does its own work.
+          $psv2 = $null
+          try { $psv2 = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop } catch { $psv2 = $null }
+          "PowerShell 2.0 engine as shipped: $(if ($psv2) { $psv2.State } else { '<feature absent>' })"
+          if ($psv2 -and "$($psv2.State)" -eq 'Enabled') {
+            $sbl = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
+            $hadSbl = Test-Path $sbl
+            if (-not $hadSbl) { New-Item $sbl -Force | Out-Null }
+            $oldSbl = (Get-ItemProperty $sbl -Name EnableScriptBlockLogging -ErrorAction SilentlyContinue).EnableScriptBlockLogging
+            Set-ItemProperty $sbl -Name EnableScriptBlockLogging -Value 1 -Type DWord
+            $v2 = .\test\powershell-v2-probe.ps1 -CheckLogging
+            if (-not $hadSbl) { Remove-Item $sbl -Recurse -Force }
+            elseif ($null -eq $oldSbl) { Remove-ItemProperty $sbl -Name EnableScriptBlockLogging }
+            else { Set-ItemProperty $sbl -Name EnableScriptBlockLogging -Value $oldSbl -Type DWord }
+            "::notice title=PowerShell 2.0 as shipped::$($v2.Result) - $($v2.Detail)"
+            if ($v2.Result -ne 'DOWNGRADES' -or $v2.DefaultLogged -ne $true -or $v2.V2Logged -ne $false) {
+              throw "the image ships the 2.0 engine but the probe did not show the bypass (default engine logged, 2.0 engine not) - its REFUSED after hardening would prove nothing"
+            }
+          } else {
+            $v2 = .\test\powershell-v2-probe.ps1
+            "::notice title=PowerShell 2.0 as shipped::$($v2.Result) - $($v2.Detail)"
+            if ($v2.Result -ne 'REDIRECTED') { throw "this image ships no 2.0 engine, yet -Version 2 did not run the current one ($($v2.Result))" }
+          }
+          $global:LASTEXITCODE = 0
 
       - name: Dry run changes nothing
         shell: powershell
@@ -292,6 +323,9 @@ jobs:
           $ddcDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -ErrorAction SilentlyContinue).DisableDomainCreds
           if ($ddcDry -eq 1) { throw "dry run set DisableDomainCreds" }
           if ((Get-SmbServerConfiguration).EncryptData) { throw "dry run turned SMB encryption on" }
+          $psv2Dry = $null
+          try { $psv2Dry = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop } catch { $psv2Dry = $null }
+          if ($psv2Dry -and "$($psv2Dry.State)" -ne 'Enabled') { throw "dry run removed the PowerShell 2.0 engine (now $($psv2Dry.State))" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"

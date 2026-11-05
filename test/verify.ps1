@@ -27,6 +27,9 @@
       * NTLM auditing: an NTLM logon against this box with a unique
         supplied user must land in the NTLM Operational log (8001 with the
         user, and the incoming 8002).
+      * PowerShell 2.0: `powershell -Version 2` must not start the 2.0
+        engine (refused where the step removed it, redirected to the
+        current engine where Windows ships none).
 
     Exit code 0 = every check passed.
 
@@ -612,6 +615,23 @@ if ($ra.Result -eq 'REFUSED') { Pass 'a RunAs endpoint cannot even be registered
 elseif ($ra.Result -eq 'NOT-RUNNING') { Pass 'WinRM is not running - no endpoint to run anyone as anybody (the policy above holds the day it starts)' }
 elseif ($ra.Result -eq 'ESCALATES') { Fail "a Remote Management Users member still runs as an administrator through a RunAs endpoint: $($ra.Detail)" }
 else { Fail "the RunAs probe did not run: $($ra.Detail)" }
+
+Write-Host '== PowerShell 2.0 engine ==' -ForegroundColor White
+# Step 33. The feature first (absent on Server 2025, which ships no 2.0
+# engine), then the behaviour that matters: ask for the 2.0 engine and see
+# which one runs. Before hardening the e2e requires DOWNGRADES on an image
+# that ships the engine, with the 2.0 marker missing from event 4104.
+$psv2 = $null
+try { $psv2 = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop } catch { $psv2 = $null }
+if ($null -eq $psv2) { Pass 'this Windows ships no PowerShell 2.0 engine (feature absent)' }
+elseif ("$($psv2.State)" -in @('Enabled', 'EnablePending')) { Fail "the PowerShell 2.0 engine is still installed ($($psv2.State))" }
+else { Pass "the PowerShell 2.0 engine is not installed ($($psv2.State))" }
+$v2 = & (Join-Path $PSScriptRoot 'powershell-v2-probe.ps1')
+Write-Host "        PowerShell 2.0 probe: $($v2.Result) - $($v2.Detail)"
+if ($v2.Result -eq 'REFUSED') { Pass 'powershell -Version 2 is refused: no 2.0 engine left to run outside script-block logging' }
+elseif ($v2.Result -eq 'REDIRECTED') { Pass 'powershell -Version 2 runs the current engine, which logs (this Windows has no 2.0 engine)' }
+elseif ($v2.Result -eq 'DOWNGRADES') { Fail "powershell -Version 2 still starts the 2.0 engine: $($v2.Detail)" }
+else { Fail "the PowerShell 2.0 probe did not run: $($v2.Detail)" }
 
 Write-Host ''
 if ($Script:Failures -gt 0) {
