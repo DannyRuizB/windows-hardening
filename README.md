@@ -7,7 +7,8 @@ A **baseline security hardening script for Windows Server**, in PowerShell —
 with a harness that proves it. CI takes disposable **Windows Server 2025 and
 2022** runners, **hardens them for real**, runs the script again to prove
 idempotence, verifies every promise (including behavioural proofs) and scores
-each box against a CIS-style checklist. Both versions give the same numbers.
+each box against a CIS-style checklist. Both versions give the same verify
+checks and the same score.
 The controls exist on Windows 10/11 too, but no CI runner offers a client SKU,
 so nothing here is claimed for them by measurement.
 
@@ -34,7 +35,7 @@ run reports **0**.
 |---|---|
 | **SMB signing** | Signs every SMB session, server *and* client. An **unsigned** SMB session is what makes NTLM relay work: the attacker sits in the middle, forwards the victim's authentication to a third host and lands a session there. Every relay tutorial starts by checking whether signing is required — measured on the CI runner, it was **not**. |
 | **WDigest** | Pins `UseLogonCredential = 0` so LSASS stops keeping **cleartext passwords in memory** for a 2008-era protocol. This single value is the difference between a credential dump handing over passwords and handing over hashes. Windows 8.1+ defaults to off, but on a fresh box the value is **absent** — and absent means "whatever this build decided", which a GPO or an application can flip back. |
-| **LLMNR + NetBIOS + mDNS** | All three protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs none of them. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — all five interfaces on the runner shipped `0`. **mDNS** (UDP 5353, spoken natively by the DNS Client on current Windows) is **not** covered by the LLMNR policy — `EnableMulticast` is LLMNR only — so it gets its own knob, `Dnscache\Parameters\EnableMDNS = 0` (absent = on). **Measured** on the runner: `EnableMDNS` absent and the DNS Client listening on UDP 5353 on `0.0.0.0` and `::`. The service reads the value at start and `Restart-Service Dnscache` is refused, so it applies at the next boot (like NetBIOS); the CI annotates the 5353 listeners before and after. |
+| **LLMNR + NetBIOS + mDNS** | All three protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs none of them. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — every interface on the runners shipped `0` (five on Server 2022, four on the current 2025 image). **mDNS** (UDP 5353, spoken natively by the DNS Client on current Windows) is **not** covered by the LLMNR policy — `EnableMulticast` is LLMNR only — so it gets its own knob, `Dnscache\Parameters\EnableMDNS = 0` (absent = on). **Measured** on the runner: `EnableMDNS` absent and the DNS Client listening on UDP 5353 on `0.0.0.0` and `::`. The service reads the value at start and `Restart-Service Dnscache` is refused, so it applies at the next boot (like NetBIOS); the CI annotates the 5353 listeners before and after. |
 | **NTLM policy** | `LmCompatibilityLevel = 5` (NTLMv2 only, refuse LM and NTLMv1) plus `NoLMHash = 1`. An LM hash has no salt, uppercases the password and splits it into two 7-byte halves — it falls to brute force in minutes. |
 | **Firewall posture** | All three profiles enabled with an **explicit inbound `Block`** and dropped-packet logging. Measured: the profiles were on but their default inbound action was `NotConfigured` — and "not configured" is not a policy, it means the answer comes from elsewhere and can change without anyone touching this machine. |
 | **PowerShell logging** | Script-block (event **4104**) and module logging. An attacker's PowerShell never has to touch disk: it arrives over the network and runs from memory, so file-based forensics find nothing. Script-block logging records the code **after** any decoding or de-obfuscation. Both keys were absent on the runner: no logging at all. |
@@ -64,6 +65,7 @@ run reports **0**.
 | **Automatic logon** | With `AutoAdminLogon = 1` the account's password sits in `Winlogon\DefaultPassword` **in plain text**, in a key every local user can read (CIS 18.4.1). **Measured** on the GitHub runner image: `AutoAdminLogon = 1`, `ForceAutoLogon = 1`, `DefaultUserName` = the runner's administrator and a **44-character `DefaultPassword`** — and a freshly created member of *Users*, reading through its own token, got it (`test/autologon-probe.ps1`: `LogonUser` + impersonation, step 22's technique; it reports the length, never the value). The step sets `AutoAdminLogon = 0` and **deletes** `DefaultPassword`. **Behavioural proof**: the e2e requires the probe to say **EXPOSED** on the box as shipped before `verify.ps1` demands **NONE**. Not touched, said out loud: an LSA-secret copy of the password (where Sysinternals Autologon keeps it — the runner has one) is SYSTEM-only and unused once autologon is off; remove it with `Autologon /delete`. And change the exposed account's password — anyone could already have read it. `-NoAutologon` to skip. |
 | **WinRM: no Basic, no unencrypted traffic** | CIS 18.10.89.1.1/1.2 (client) and 18.10.89.2.1/2.3 (service). WinRM is the administration channel this baseline *keeps* — step 11 retires RemoteRegistry in its favour — so how it authenticates is the whole question. **Basic** puts the account's actual password in a header, base64 and not a hash, for whatever endpoint answers; with **unencrypted traffic** allowed it crosses the wire that way. Negotiate/Kerberos never send the password, and stay. **Measured** on the runner: WinRM running with HTTP 5985 *and* HTTPS 5986 listeners on every address, and **`Service\Auth\Basic = true` as shipped** — a raw POST to `5986/wsman` with the right password in a Basic header was authenticated (HTTP 500 for the empty envelope, 401 with a wrong one); with `AllowUnencrypted` planted, `Invoke-Command -Authentication Basic` got in over plain HTTP. Set by **policy** (`AllowBasic = 0`, `AllowUnencryptedTraffic = 0` on both sides), which also locks the local config — `Set-Item WSMan:\…` is refused afterwards (measured). **The trap that decided the restart**: `WSMan:\` and `winrm get` show the policy at once (`[Source="GPO"]`), but the **running service kept taking Basic over HTTP** until `Restart-Service WinRM` — so the step restarts it, unless the run itself came in over WinRM (`$PSSenderInfo`), where that would cut the caller off and it is left to the operator. **Behavioural proof** (`test/winrm-probe.ps1`): a throwaway local administrator's right password in a Basic header must get **401 on every listener**, and the same account must still get in with Negotiate — the e2e first requires the same probe to see the password **taken on both** listeners after planting. `-NoWinRm` to skip. |
 | **WinRM: no stored RunAs credentials** | CIS 18.10.89.2.4 (`DisableRunAs = 1`). A session configuration registered with `-RunAsCredential` runs **every caller's commands as that account**, and WinRM keeps its password. **Measured** on the runner: a new configuration's default permissions are *INTERACTIVE*, *Administrators* and *Remote Management Users* — so a member of Remote Management Users connecting to one that runs as an administrator **ran as that administrator** (`whoami`, `IsInRole('Administrators')` True). With the policy and WinRM restarted, that endpoint is refused (*Verify that the RunAsPassword value is correctly configured…*), registering a new one is refused (*To enable WinRM to store RunAs credentials, change the "Disallow WinRM from storing RunAs credentials" Group Policy setting…*), and a **JEA endpoint with a virtual account** (`RunAsVirtualAccount`, no stored password) **keeps working** — that is the replacement. **One-way, measured**: with the policy removed again and WinRM restarted, the old endpoint stayed broken until its credential was given again (`Set-PSSessionConfiguration -RunAsCredential`), so the step **names every endpoint that runs as a stored account** before it applies. Steps 31 and 32 share one WinRM restart. **Behavioural proof** (`test/winrm-runas-probe.ps1`): before hardening the e2e requires a Remote Management Users member to run as the administrator through a freshly registered RunAs endpoint (ESCALATES); after it, registering one must be refused. `-NoWinRmRunAs` to skip. |
+| **PowerShell 2.0 engine removed** | Step 6 makes every script block land in event **4104** — for the engines that know how. The **2.0 engine** predates script-block logging (and AMSI), and `powershell.exe -Version 2` still starts it wherever it is installed: the downgrade that walks straight past step 6. **Measured** on the Server 2022 runner, which ships the engine together with the .NET 3.5 it needs: with script-block logging on, a marker run by the default engine landed in 4104 and **the same marker run with `-Version 2` did not**. The step removes the optional feature `MicrosoftWindowsPowerShellV2` — 15 seconds, **no reboot** (measured): right after it, `-Version 2` is refused (*the Windows PowerShell 2 engine is not installed*). Server 2025 ships no 2.0 engine at all — there `-Version 2` warns that 2.0 is deprecated and runs the current engine, which logs — so the step has nothing to remove and says so. Verified by behaviour, not by the feature list: ask for the 2.0 engine and read back which one ran. |
 
 ### Deliberately *not* in the baseline
 
@@ -88,8 +90,12 @@ The CI does what a reviewer would want to see done:
 0. Runs on **two** disposable servers, **Windows Server 2025 and 2022**
    (`windows-2025`, `windows-2022`), every step below on each. The README once
    said *Windows Server / Windows 10-11* while only 2025 ran; 2022 was added
-   and passed as it stood — the same 76 changes, 107 verify checks and
-   68/2/0 score. A client SKU (10/11) is not on offer, so it is not claimed.
+   and passed as it stood — the same verify checks and score. The number of
+   changes is the image's, not the script's: NetBIOS is one change per network
+   interface (five on 2022, four on the current 2025 image), and only 2022
+   ships the PowerShell 2.0 engine that step 33 removes — 77 changes on 2022,
+   75 on 2025, measured. A client SKU (10/11) is not on offer, so it is not
+   claimed.
 1. **Prints the starting posture** — the weak values are in the log, so the
    "after" means something.
 2. **Plants the offenders that would otherwise be tautological.** Most are
@@ -132,6 +138,12 @@ The CI does what a reviewer would want to see done:
      endpoint: before hardening a Remote Management Users member runs as that
      administrator through it, after hardening the registration itself is
      refused.
+   - `powershell.exe -Version 2` is asked for the 2.0 engine and reports which
+     engine actually ran: after hardening it must be refused (Server 2022) or
+     run the current, logged engine (Server 2025). Before hardening, on 2022,
+     the same probe must show the bypass itself — with script-block logging
+     switched on for the check, the default engine's marker lands in 4104 and
+     the 2.0 engine's does not.
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -215,14 +227,14 @@ obeyed.
 
 ## Status
 
-Early but honest: 32 steps, 107 verify checks (eighteen of them behavioural), a scored
+Early but honest: 33 steps, 109 verify checks (nineteen of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 68 PASS, 2 WARN, 0 FAIL  ->  99% compliant
+ Score: 69 PASS, 2 WARN, 0 FAIL  ->  99% compliant
 ```
 
 **Not 100%, on purpose.** The two warnings are the controls this baseline

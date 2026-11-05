@@ -225,8 +225,26 @@ $scenarios = @(
        Desc   = 'WinRM may keep storing RunAs credentials (the planted 0)' }
 )
 
+# Step 33 has an offender to plant only where Windows ships the 2.0 engine
+# (Server 2022: re-enabling the removed feature took 5 s and no reboot,
+# measured). Server 2025 has no such feature - nothing can be planted, so the
+# switch is not exercised there, and the run says so instead of passing it.
+function Get-PowerShellV2State {
+    try { "$((Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop).State)" } catch { '' }
+}
+if (Get-PowerShellV2State) {
+    $scenarios += @{ Switch = 'NoPowerShellV2'
+       Plant  = { Enable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -All -NoRestart -WarningAction SilentlyContinue | Out-Null }
+       Probe  = { (Get-PowerShellV2State) -in @('Enabled', 'EnablePending') }
+       State  = { "MicrosoftWindowsPowerShellV2 = $(Get-PowerShellV2State)" }
+       Desc   = 'the planted PowerShell 2.0 engine stays installed' }
+}
+
 Write-Host ''
 Write-Host '=== -No* switch scenarios (one per step) ===' -ForegroundColor White
+if (-not (Get-PowerShellV2State)) {
+    Write-Host '-- -NoPowerShellV2: not exercised - this Windows ships no PowerShell 2.0 engine to plant --' -ForegroundColor Yellow
+}
 foreach ($s in $scenarios) {
     Write-Host "-- -$($s.Switch) --" -ForegroundColor White
     # A plant that does not take is noise about the TEST, not a verdict on

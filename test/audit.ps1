@@ -126,6 +126,15 @@ if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLo
 if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging' 'EnableModuleLogging') -eq 1) {
     P 'PowerShell module logging is on'
 } else { W 'PowerShell module logging is off' 'run harden.ps1 (PowerShell logging step)' }
+# Step 33: the 2.0 engine predates script-block logging - measured on Server
+# 2022, a marker run with -Version 2 never reached event 4104. Server 2025
+# ships no 2.0 engine (the feature is absent).
+$psv2Feature = $null
+try { $psv2Feature = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop } catch { $psv2Feature = $null }
+if ($null -eq $psv2Feature) { P 'no PowerShell 2.0 engine on this Windows (-Version 2 runs the current, logged engine)' }
+elseif ("$($psv2Feature.State)" -in @('Enabled', 'EnablePending')) {
+    F 'the PowerShell 2.0 engine is installed: powershell -Version 2 runs outside script-block logging' 'run harden.ps1 (PowerShell 2.0 step): Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2'
+} else { P "the PowerShell 2.0 engine is not installed ($($psv2Feature.State))" }
 # Applied by harden.ps1 step 9 - graded through the backup CSV because it is
 # the only locale-proof interface auditpol has (the old version of this very
 # check matched the words 'Success and Failure' and would have judged a
