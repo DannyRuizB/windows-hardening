@@ -223,6 +223,10 @@ $scenarios = @(
        Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' -Name DisableRunAs -Value 0 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service' DisableRunAs) -ne 1 }
        Desc   = 'WinRM may keep storing RunAs credentials (the planted 0)' }
+    @{ Switch = 'NoLocalAccountTokenFilter'
+       Plant  = { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -Value 1 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' LocalAccountTokenFilterPolicy) -eq 1 }
+       Desc   = 'local administrators keep a full token over the network (the planted 1, as the image ships it)' }
 )
 
 # Step 33 has an offender to plant only where Windows ships the 2.0 engine

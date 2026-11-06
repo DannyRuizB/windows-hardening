@@ -30,6 +30,10 @@
       * PowerShell 2.0: `powershell -Version 2` must not start the 2.0
         engine (refused where the step removed it, redirected to the
         current engine where Windows ships none).
+      * UAC remote restrictions: a throwaway LOCAL administrator logging on
+        over the network must be refused C$, ADMIN$ and an admin WinRM
+        session, while IPC$ still opens (the password is fine; the token is
+        not admin).
 
     Exit code 0 = every check passed.
 
@@ -593,11 +597,12 @@ foreach ($side in 'Service', 'Client') {
 # Behavioural, because the policy is not the service: measured, WSMan:\ shows
 # the policy at once while the running service still took Basic until it was
 # restarted. As shipped the runner's HTTPS listener authenticated the right
-# password in a Basic header; now every listener must refuse it, and
-# Negotiate must still get in.
+# password in a Basic header; now every listener must refuse it, the
+# password must still log on over the network, and Negotiate must still let
+# the caller in (not the probe account: step 34 filters its token).
 $wr = & (Join-Path $PSScriptRoot 'winrm-probe.ps1')
 Write-Host "        WinRM probe: $($wr.Result) - $($wr.Detail)"
-if ($wr.Result -eq 'REFUSED') { Pass 'no WinRM listener takes a password in a Basic header, and Negotiate still gets in' }
+if ($wr.Result -eq 'REFUSED') { Pass 'no WinRM listener takes a password in a Basic header, and Negotiate still lets the caller in' }
 elseif ($wr.Result -eq 'NOT-RUNNING') { Pass 'WinRM is not running - nothing listens to take a Basic header (the policy above holds the day it starts)' }
 elseif ($wr.Result -eq 'ACCEPTED') { Fail "a WinRM listener still takes a password in a Basic header: $($wr.Detail)" }
 else { Fail "the WinRM probe did not run: $($wr.Detail)" }
@@ -632,6 +637,19 @@ if ($v2.Result -eq 'REFUSED') { Pass 'powershell -Version 2 is refused: no 2.0 e
 elseif ($v2.Result -eq 'REDIRECTED') { Pass 'powershell -Version 2 runs the current engine, which logs (this Windows has no 2.0 engine)' }
 elseif ($v2.Result -eq 'DOWNGRADES') { Fail "powershell -Version 2 still starts the 2.0 engine: $($v2.Detail)" }
 else { Fail "the PowerShell 2.0 probe did not run: $($v2.Detail)" }
+
+Write-Host '== Local accounts: filtered token over the network ==' -ForegroundColor White
+# Step 34. Absent filters too (measured), but the step pins 0 so the answer
+# is written down instead of left to whatever set it last - the image
+# shipped 1. Then the behaviour: before hardening the e2e requires the same
+# probe to see a local administrator's password open C$ (FULL-TOKEN).
+Test-RegEquals 'local administrators get a filtered token over the network (UAC remote restrictions)' `
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'LocalAccountTokenFilterPolicy' 0
+$tf = & (Join-Path $PSScriptRoot 'token-filter-probe.ps1')
+Write-Host "        token-filter probe: $($tf.Result) - $($tf.Detail)"
+if ($tf.Result -eq 'FILTERED') { Pass 'a local administrator''s password no longer opens C$, ADMIN$ or an admin WinRM session (IPC$ still opens: the password is fine, the token is not admin)' }
+elseif ($tf.Result -eq 'FULL-TOKEN') { Fail "a local administrator still logs on over the network with a full token: $($tf.Detail)" }
+else { Fail "the token-filter probe did not run: $($tf.Detail)" }
 
 Write-Host ''
 if ($Script:Failures -gt 0) {

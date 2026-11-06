@@ -274,6 +274,47 @@ jobs:
             if ($v2.Result -ne 'REDIRECTED') { throw "this image ships no 2.0 engine, yet -Version 2 did not run the current one ($($v2.Result))" }
           }
           $global:LASTEXITCODE = 0
+          # Step 34: nothing to plant - the image ships
+          # LocalAccountTokenFilterPolicy = 1 (measured). The SAME probe verify
+          # runs must see a local administrator's password open the admin
+          # shares or an admin WinRM session, or its FILTERED after hardening
+          # would prove nothing.
+          $sysKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          "LocalAccountTokenFilterPolicy as shipped: $((Get-ItemProperty $sysKey -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy)"
+          $tf = .\test\token-filter-probe.ps1
+          "::notice title=Local administrator over the network as shipped::$($tf.Result) - $($tf.Detail)"
+          if ($tf.Result -ne 'FULL-TOKEN') { throw "a local administrator's password did not open an admin share or an admin WinRM session even as shipped ($($tf.Result)) - its FILTERED after hardening would prove nothing" }
+          $global:LASTEXITCODE = 0
+          # Step 34's guard, for real: a run that came in over WinRM as a LOCAL
+          # administrator must not filter its own next session. A throwaway
+          # local admin opens a WinRM session (a full token: the image ships 1),
+          # dot-sources harden.ps1 there (functions only, no Main) and runs the
+          # step. The value must still be 1, the guard must have said why, and
+          # the step must be on the left-for-the-operator list.
+          $gu = 'whGd' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+          $gp = 'Gd-' + [guid]::NewGuid().ToString('N') + '-a7Z!'
+          net user $gu $gp /add /y | Out-Null
+          net localgroup Administrators $gu /add | Out-Null
+          $gsec = New-Object System.Security.SecureString
+          foreach ($ch in $gp.ToCharArray()) { $gsec.AppendChar($ch) }
+          $gcred = New-Object System.Management.Automation.PSCredential($gu, $gsec)
+          $hardenPath = (Resolve-Path .\harden.ps1).Path
+          try {
+            $guard = Invoke-Command -ComputerName localhost -Credential $gcred -ErrorAction Stop -ArgumentList $hardenPath -ScriptBlock {
+              param($path)
+              . $path
+              $reason = Get-TokenFilterLockoutReason
+              Set-LocalAccountTokenFilter
+              $now = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy).LocalAccountTokenFilterPolicy
+              "$reason|$now|$($Script:LeftForOperator.Count)"
+            }
+          } finally { net user $gu /delete | Out-Null }
+          $gReason, $gAfter, $gLeft = "$(@($guard)[-1])".Split('|')
+          "::notice title=Step 34 guard over WinRM::reason='$gReason' value after=$gAfter left for the operator=$gLeft"
+          if (-not $gReason -or $gAfter -ne '1' -or $gLeft -ne '1') {
+            throw "step 34 run over WinRM by a local administrator did not hold back (reason '$gReason', value $gAfter, left $gLeft) - it would cut its own channel"
+          }
+          $global:LASTEXITCODE = 0
 
       - name: Dry run changes nothing
         shell: powershell
@@ -326,6 +367,8 @@ jobs:
           $psv2Dry = $null
           try { $psv2Dry = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 -ErrorAction Stop } catch { $psv2Dry = $null }
           if ($psv2Dry -and "$($psv2Dry.State)" -ne 'Enabled') { throw "dry run removed the PowerShell 2.0 engine (now $($psv2Dry.State))" }
+          $latfpDry = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy
+          if ($latfpDry -ne 1) { throw "dry run changed LocalAccountTokenFilterPolicy to $latfpDry" }
           "dry run left the planted offenders alone"
 
       - name: "First pass: harden the node for real"
