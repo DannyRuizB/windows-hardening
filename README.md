@@ -35,7 +35,7 @@ run reports **0**.
 |---|---|
 | **SMB signing** | Signs every SMB session, server *and* client. An **unsigned** SMB session is what makes NTLM relay work: the attacker sits in the middle, forwards the victim's authentication to a third host and lands a session there. Every relay tutorial starts by checking whether signing is required — measured on the CI runner, it was **not**. |
 | **WDigest** | Pins `UseLogonCredential = 0` so LSASS stops keeping **cleartext passwords in memory** for a 2008-era protocol. This single value is the difference between a credential dump handing over passwords and handing over hashes. Windows 8.1+ defaults to off, but on a fresh box the value is **absent** — and absent means "whatever this build decided", which a GPO or an application can flip back. |
-| **LLMNR + NetBIOS + mDNS** | All three protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs none of them. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — every interface on the runners shipped `0` (five on Server 2022, four on the current 2025 image). **mDNS** (UDP 5353, spoken natively by the DNS Client on current Windows) is **not** covered by the LLMNR policy — `EnableMulticast` is LLMNR only — so it gets its own knob, `Dnscache\Parameters\EnableMDNS = 0` (absent = on). **Measured** on the runner: `EnableMDNS` absent and the DNS Client listening on UDP 5353 on `0.0.0.0` and `::`. The service reads the value at start and `Restart-Service Dnscache` is refused, so it applies at the next boot (like NetBIOS); the CI annotates the 5353 listeners before and after. |
+| **LLMNR + NetBIOS + mDNS** | All three protocols broadcast *"who is FILESRV?"* to the whole segment and believe **whoever answers first**. That is exactly what Responder answers, collecting an NTLM exchange to crack or relay. DNS needs none of them. NetBIOS is **per interface**, and `NetbiosOptions = 0` means "use the DHCP setting" (usually on) — every interface on the runners shipped `0` (four or five of them, depending on the image build). **mDNS** (UDP 5353, spoken natively by the DNS Client on current Windows) is **not** covered by the LLMNR policy — `EnableMulticast` is LLMNR only — so it gets its own knob, `Dnscache\Parameters\EnableMDNS = 0` (absent = on). **Measured** on the runner: `EnableMDNS` absent and the DNS Client listening on UDP 5353 on `0.0.0.0` and `::`. The service reads the value at start and `Restart-Service Dnscache` is refused, so it applies at the next boot (like NetBIOS); the CI annotates the 5353 listeners before and after. |
 | **NTLM policy** | `LmCompatibilityLevel = 5` (NTLMv2 only, refuse LM and NTLMv1) plus `NoLMHash = 1`. An LM hash has no salt, uppercases the password and splits it into two 7-byte halves — it falls to brute force in minutes. |
 | **Firewall posture** | All three profiles enabled with an **explicit inbound `Block`** and dropped-packet logging. Measured: the profiles were on but their default inbound action was `NotConfigured` — and "not configured" is not a policy, it means the answer comes from elsewhere and can change without anyone touching this machine. |
 | **PowerShell logging** | Script-block (event **4104**) and module logging. An attacker's PowerShell never has to touch disk: it arrives over the network and runs from memory, so file-based forensics find nothing. Script-block logging records the code **after** any decoding or de-obfuscation. Both keys were absent on the runner: no logging at all. |
@@ -63,9 +63,10 @@ run reports **0**.
 | **Logon banner** | CIS 2.3.7.4 / 2.3.7.5. `LegalNoticeCaption` + `LegalNoticeText` make Winlogon show a warning **before the credential prompt** — on the console and over RDP — that the user has to acknowledge. It stops no attacker by itself; its job is the paper trail: someone told *authorized use only, activity is monitored* cannot later claim the box looked open, and many policies and audits require it. The Windows face of the Linux twins' `/etc/issue` step. **Measured** on the runner (Server 2025, via a probe branch): the caption ships as an **empty string** and the text as **a single NUL character** — no banner. That NUL is the trap: the text is *present* and has length 1, so a naive "is it set" check passes on the factory value; `audit.ps1` and `verify.ps1` strip NULs and whitespace before calling it set. The wording is yours: `-BannerCaption` / `-BannerText` (the default is a short authorized-use and monitoring notice — have legal word the real one). State-verified: seeing the banner needs a real interactive logon, which a headless runner does not have. The CI **plants** a blank caption and text and requires one run to repair them. `-NoLogonBanner` to skip. |
 | **ICMP redirects and source routing** | An ICMP redirect is a router saying *use that gateway instead* — and anyone on the segment can send one, a way to pull this box's traffic through an attacker without touching ARP; source routing lets the **sender** pick the path. Both stacks stop accepting redirects and **drop** source-routed packets (`IcmpRedirects = Disabled`, `SourceRoutingBehavior = Drop`, IPv4 and IPv6) — the Windows face of the Linux twins' `accept_redirects` / `accept_source_route`. **Measured** on the runner (Server 2025, probe branch): redirects **enabled** and source routing at `DontForward` on both. And the finding that decided *how*: the MSS registry values the old baselines set (`Tcpip\Parameters` `EnableICMPRedirect = 0`, `DisableIPSourceRouting = 2`) did **not** change the running stack — `netsh int ipv4 show global` still said *enabled* after writing them, and netsh does not write them either — so the step uses `Set-NetIPv4Protocol` / `Set-NetIPv6Protocol`, measured to change the live stack **and** its persistent store, and `verify.ps1` reads the live values back. The CI plants the shipped values for the scenario. `-NoIcmpRedirects` to skip. |
 | **Automatic logon** | With `AutoAdminLogon = 1` the account's password sits in `Winlogon\DefaultPassword` **in plain text**, in a key every local user can read (CIS 18.4.1). **Measured** on the GitHub runner image: `AutoAdminLogon = 1`, `ForceAutoLogon = 1`, `DefaultUserName` = the runner's administrator and a **44-character `DefaultPassword`** — and a freshly created member of *Users*, reading through its own token, got it (`test/autologon-probe.ps1`: `LogonUser` + impersonation, step 22's technique; it reports the length, never the value). The step sets `AutoAdminLogon = 0` and **deletes** `DefaultPassword`. **Behavioural proof**: the e2e requires the probe to say **EXPOSED** on the box as shipped before `verify.ps1` demands **NONE**. Not touched, said out loud: an LSA-secret copy of the password (where Sysinternals Autologon keeps it — the runner has one) is SYSTEM-only and unused once autologon is off; remove it with `Autologon /delete`. And change the exposed account's password — anyone could already have read it. `-NoAutologon` to skip. |
-| **WinRM: no Basic, no unencrypted traffic** | CIS 18.10.89.1.1/1.2 (client) and 18.10.89.2.1/2.3 (service). WinRM is the administration channel this baseline *keeps* — step 11 retires RemoteRegistry in its favour — so how it authenticates is the whole question. **Basic** puts the account's actual password in a header, base64 and not a hash, for whatever endpoint answers; with **unencrypted traffic** allowed it crosses the wire that way. Negotiate/Kerberos never send the password, and stay. **Measured** on the runner: WinRM running with HTTP 5985 *and* HTTPS 5986 listeners on every address, and **`Service\Auth\Basic = true` as shipped** — a raw POST to `5986/wsman` with the right password in a Basic header was authenticated (HTTP 500 for the empty envelope, 401 with a wrong one); with `AllowUnencrypted` planted, `Invoke-Command -Authentication Basic` got in over plain HTTP. Set by **policy** (`AllowBasic = 0`, `AllowUnencryptedTraffic = 0` on both sides), which also locks the local config — `Set-Item WSMan:\…` is refused afterwards (measured). **The trap that decided the restart**: `WSMan:\` and `winrm get` show the policy at once (`[Source="GPO"]`), but the **running service kept taking Basic over HTTP** until `Restart-Service WinRM` — so the step restarts it, unless the run itself came in over WinRM (`$PSSenderInfo`), where that would cut the caller off and it is left to the operator. **Behavioural proof** (`test/winrm-probe.ps1`): a throwaway local administrator's right password in a Basic header must get **401 on every listener**, and the same account must still get in with Negotiate — the e2e first requires the same probe to see the password **taken on both** listeners after planting. `-NoWinRm` to skip. |
+| **WinRM: no Basic, no unencrypted traffic** | CIS 18.10.89.1.1/1.2 (client) and 18.10.89.2.1/2.3 (service). WinRM is the administration channel this baseline *keeps* — step 11 retires RemoteRegistry in its favour — so how it authenticates is the whole question. **Basic** puts the account's actual password in a header, base64 and not a hash, for whatever endpoint answers; with **unencrypted traffic** allowed it crosses the wire that way. Negotiate/Kerberos never send the password, and stay. **Measured** on the runner: WinRM running with HTTP 5985 *and* HTTPS 5986 listeners on every address, and **`Service\Auth\Basic = true` as shipped** — a raw POST to `5986/wsman` with the right password in a Basic header was authenticated (HTTP 500 for the empty envelope, 401 with a wrong one); with `AllowUnencrypted` planted, `Invoke-Command -Authentication Basic` got in over plain HTTP. Set by **policy** (`AllowBasic = 0`, `AllowUnencryptedTraffic = 0` on both sides), which also locks the local config — `Set-Item WSMan:\…` is refused afterwards (measured). **The trap that decided the restart**: `WSMan:\` and `winrm get` show the policy at once (`[Source="GPO"]`), but the **running service kept taking Basic over HTTP** until `Restart-Service WinRM` — so the step restarts it, unless the run itself came in over WinRM (`$PSSenderInfo`), where that would cut the caller off and it is left to the operator. **Behavioural proof** (`test/winrm-probe.ps1`): a throwaway local administrator's right password in a Basic header must get **401 on every listener**, while the same password still logs on over the network and Negotiate still lets the caller in — the e2e first requires the same probe to see the password **taken on both** listeners after planting. (The witness used to be the probe account's own Negotiate session; step 34 filters exactly that, see the gotchas.) `-NoWinRm` to skip. |
 | **WinRM: no stored RunAs credentials** | CIS 18.10.89.2.4 (`DisableRunAs = 1`). A session configuration registered with `-RunAsCredential` runs **every caller's commands as that account**, and WinRM keeps its password. **Measured** on the runner: a new configuration's default permissions are *INTERACTIVE*, *Administrators* and *Remote Management Users* — so a member of Remote Management Users connecting to one that runs as an administrator **ran as that administrator** (`whoami`, `IsInRole('Administrators')` True). With the policy and WinRM restarted, that endpoint is refused (*Verify that the RunAsPassword value is correctly configured…*), registering a new one is refused (*To enable WinRM to store RunAs credentials, change the "Disallow WinRM from storing RunAs credentials" Group Policy setting…*), and a **JEA endpoint with a virtual account** (`RunAsVirtualAccount`, no stored password) **keeps working** — that is the replacement. **One-way, measured**: with the policy removed again and WinRM restarted, the old endpoint stayed broken until its credential was given again (`Set-PSSessionConfiguration -RunAsCredential`), so the step **names every endpoint that runs as a stored account** before it applies. Steps 31 and 32 share one WinRM restart. **Behavioural proof** (`test/winrm-runas-probe.ps1`): before hardening the e2e requires a Remote Management Users member to run as the administrator through a freshly registered RunAs endpoint (ESCALATES); after it, registering one must be refused. `-NoWinRmRunAs` to skip. |
 | **PowerShell 2.0 engine removed** | Step 6 makes every script block land in event **4104** — for the engines that know how. The **2.0 engine** predates script-block logging (and AMSI), and `powershell.exe -Version 2` still starts it wherever it is installed: the downgrade that walks straight past step 6. **Measured** on the Server 2022 runner, which ships the engine together with the .NET 3.5 it needs: with script-block logging on, a marker run by the default engine landed in 4104 and **the same marker run with `-Version 2` did not**. The step removes the optional feature `MicrosoftWindowsPowerShellV2` — 15 seconds, **no reboot** (measured): right after it, `-Version 2` is refused (*the Windows PowerShell 2 engine is not installed*). Server 2025 ships no 2.0 engine at all — there `-Version 2` warns that 2.0 is deprecated and runs the current engine, which logs — so the step has nothing to remove and says so. Verified by behaviour, not by the feature list: ask for the 2.0 engine and read back which one ran. |
+| **UAC remote restrictions for local accounts** | Microsoft's baseline setting *Apply UAC restrictions to local accounts on network logons*. With `LocalAccountTokenFilterPolicy = 1` a **local** administrator logging on over the network gets a **full** token, so one local admin password — or just its NTLM hash, which is all pass-the-hash needs — is remote administration: the admin shares, PsExec-style service creation, an elevated WinRM session. **Measured** on both runners: the image ships **1**, and a throwaway local administrator opened `C$` and `ADMIN$` on the box's own IPv4 and got a High-integrity WinRM session. With `0`, and with the value absent, `C$` and `ADMIN$` answer *System error 5 … Access is denied*, WinRM *Access is denied*, and **`IPC$` still opens** — the password is fine, the token is not admin. Unlike SAM (step 22) the filter treats `\\127.0.0.1` as a network logon too. Next logon, no reboot. **Said out loud**: the **built-in Administrator (RID 500) is exempt** — the runner's own still opened `C$` and WinRM with the policy at 0 (the audit grades it, see below) — and domain accounts are not filtered (documented; there is no domain here to measure). Remote administration with *other* local accounts stops, so the step names them before it applies (on the 2022 image it names `installer`, a local administrator the image ships); and **a run that came in over WinRM as a local administrator does not cut its own channel**: it leaves the step to the operator and says so at the end (the e2e runs the step inside exactly such a session and requires the value untouched). **Behavioural proof** (`test/token-filter-probe.ps1`): before hardening the e2e requires a fresh local administrator to get in (**FULL-TOKEN**); `verify.ps1` requires `C$`, `ADMIN$` and WinRM refused with `IPC$` open (**FILTERED**). `-NoLocalAccountTokenFilter` to skip. |
 
 ### Deliberately *not* in the baseline
 
@@ -76,6 +77,14 @@ so they stay visible, but the script never applies them silently:
   interactive workstation; on a machine with **no interactive session** (a CI
   runner, an unattended server) raising the prompt can hang anything that needs
   elevation. Same reasoning that keeps `noexec /tmp` out of the Bash sibling.
+- **Admin Approval Mode for the built-in Administrator**
+  (`FilterAdministratorToken = 1`). Step 34 filters every local administrator
+  over the network *except* RID 500 — measured, the runner's built-in
+  Administrator still opened `C$` and WinRM with the filter on. Admin Approval
+  Mode would cover it too, but on the CI runner that account **is** the one
+  running everything. On a real server the better fix is to disable it and
+  administer with named accounts; the audit says so (WARN while it is enabled
+  and exempt, PASS once it is disabled or in Admin Approval Mode).
 - **Defender real-time protection.** A CI image ships it off for build speed;
   forcing it there fights the platform. On a real server the audit's WARN is a
   real to-do.
@@ -92,10 +101,11 @@ The CI does what a reviewer would want to see done:
    said *Windows Server / Windows 10-11* while only 2025 ran; 2022 was added
    and passed as it stood — the same verify checks and score. The number of
    changes is the image's, not the script's: NetBIOS is one change per network
-   interface (five on 2022, four on the current 2025 image), and only 2022
-   ships the PowerShell 2.0 engine that step 33 removes — 77 changes on 2022,
-   75 on 2025, measured. A client SKU (10/11) is not on offer, so it is not
-   claimed.
+   interface, and the interface count moves between image builds (the 2025
+   image had four for step 33's CI and five again for step 34's); only 2022
+   ships the PowerShell 2.0 engine that step 33 removes. Step 34's CI: 78
+   changes on 2022, 77 on 2025. A client SKU (10/11) is not on offer, so it
+   is not claimed.
 1. **Prints the starting posture** — the weak values are in the log, so the
    "after" means something.
 2. **Plants the offenders that would otherwise be tautological.** Most are
@@ -132,8 +142,9 @@ The CI does what a reviewer would want to see done:
      descriptor;
    - a throwaway **local administrator** puts its right password in a Basic
      header to every WinRM listener (HTTP 5985 and HTTPS 5986): each must
-     answer 401, and the same account must still get in with Negotiate — the
-     same probe that, before hardening, must find the password taken on both;
+     answer 401, while that password still logs on over the network and
+     Negotiate still lets the caller in — the same probe that, before
+     hardening, must find the password taken on both;
    - a throwaway administrator's credential is registered as a WinRM RunAs
      endpoint: before hardening a Remote Management Users member runs as that
      administrator through it, after hardening the registration itself is
@@ -144,6 +155,12 @@ The CI does what a reviewer would want to see done:
      the same probe must show the bypass itself — with script-block logging
      switched on for the check, the default engine's marker lands in 4104 and
      the 2.0 engine's does not.
+   - a throwaway **local administrator** logs on over the network: `C$`,
+     `ADMIN$` and an admin WinRM session must be refused while `IPC$` opens —
+     the same probe that, before hardening, must see it get in. Before
+     hardening the e2e also runs step 34 *inside* such an administrator's
+     WinRM session and requires it to hold back (value untouched, step left to
+     the operator).
 7. **`audit.ps1`** scores the box; it fails the build only on `FAIL`, never on
    `WARN` (a warning is a to-do, not a broken build).
 8. **Flag behaviour**: `-NoWDigest` must leave its planted offender alone while
@@ -183,6 +200,13 @@ belt alone has to hold.
 — which makes an account with *no* password, exactly what the 14-character
 minimum we had just applied refuses. The check failed because the policy
 worked, so the refusal is now the first of three linked assertions.
+It happened again with step 34: step 31's WinRM probe proved its 401s meant
+"Basic refused" by letting the same throwaway local administrator in with
+Negotiate — and filtering that very logon is what step 34 is for (measured:
+`Invoke-Command`, `Test-WSMan` and a raw Negotiate POST all refused, right
+password or wrong). The witnesses are now the password itself (a network
+`LogonUser`) and the caller's own Negotiate session; the Basic answers were
+unaffected (the right password still got HTTP 500 with the filter on).
 
 **The probe that must fail poisoned the exit code.** Step 9's behavioural check
 *needs* `net use` to fail — the failed logon **is** the check. But GitHub's
@@ -227,19 +251,22 @@ obeyed.
 
 ## Status
 
-Early but honest: 33 steps, 109 verify checks (nineteen of them behavioural), a scored
+Early but honest: 34 steps, 111 verify checks (twenty of them behavioural), a scored
 audit, a scenario suite covering every `-No*` switch, and CI that hardens a real
 Windows box on every push.
 
 Current score on a freshly hardened CI runner:
 
 ```
- Score: 69 PASS, 2 WARN, 0 FAIL  ->  99% compliant
+ Score: 70 PASS, 3 WARN, 0 FAIL  ->  98% compliant
 ```
 
-**Not 100%, on purpose.** The two warnings are the controls this baseline
+**Not 100%, on purpose.** The three warnings are the controls this baseline
 declines to apply on a machine it does not own: Defender real-time protection
-(off by design in the CI image) and the UAC consent prompt. Padding the score by
+(off by design in the CI image), the UAC consent prompt, and Admin Approval
+Mode for the built-in Administrator (on the runner it is the account running
+the CI; step 34 measured that it is the one administrator the network token
+filter leaves alone). Padding the score by
 applying them blindly would make the number prettier and the tool worse. LSA
 protection (`RunAsPPL`) is now applied by the baseline, staged for the next boot.
 

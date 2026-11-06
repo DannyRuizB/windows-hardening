@@ -437,6 +437,23 @@ else { F 'UAC is DISABLED' 'set Policies\System\EnableLUA=1 (needs a reboot)' }
 $consent = Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'ConsentPromptBehaviorAdmin'
 if ($consent -in @(1, 2)) { P "Admins are prompted for elevation (ConsentPromptBehaviorAdmin=$consent)" }
 else { W "Admins elevate without a prompt (ConsentPromptBehaviorAdmin=$consent)" 'set it to 2 on interactive machines - deliberately not applied by this baseline (see README)' }
+# Step 34: with LocalAccountTokenFilterPolicy = 1 a LOCAL administrator's
+# password - or hash - is a full token over the network (measured: C$,
+# ADMIN$ and a High-integrity WinRM session opened). 0 or absent filters it.
+$uacKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+$latfp = Get-Reg $uacKey 'LocalAccountTokenFilterPolicy'
+if ($latfp -eq 0) { P 'local administrators get a filtered token over the network (LocalAccountTokenFilterPolicy=0)' }
+elseif ($null -eq $latfp) { W 'LocalAccountTokenFilterPolicy is absent (that filters too - measured - but nothing pins it)' 'run harden.ps1 (UAC remote restrictions step)' }
+else { F "local administrators log on over the network with a FULL token (LocalAccountTokenFilterPolicy=$latfp): one local admin password or hash is remote administration" 'run harden.ps1 (UAC remote restrictions step)' }
+# The built-in Administrator (RID 500) is exempt from that filter - measured,
+# the runner's own still opened C$ and WinRM with the policy at 0 - unless
+# Admin Approval Mode covers it too. Not applied by the baseline (on the CI
+# runner it is the account that runs everything), graded so it stays visible.
+$builtinAdmin = $null
+try { $builtinAdmin = Get-LocalUser -ErrorAction Stop | Where-Object { "$($_.SID.Value)" -match '-500$' } | Select-Object -First 1 } catch { $builtinAdmin = $null }
+if ((Get-Reg $uacKey 'FilterAdministratorToken') -eq 1) { P 'the built-in Administrator is in Admin Approval Mode too (FilterAdministratorToken=1)' }
+elseif ($builtinAdmin -and -not $builtinAdmin.Enabled) { P "the built-in Administrator ($($builtinAdmin.Name)) is disabled, so its exemption from the network token filter does not matter" }
+else { W "the built-in Administrator$(if ($builtinAdmin) { " ($($builtinAdmin.Name))" }) is enabled and exempt from the network token filter: its password still opens C`$ and WinRM with a full token" 'disable it and administer with named accounts, or set FilterAdministratorToken=1 - deliberately not applied by this baseline (see README)' }
 
 # The guard the old bug earned: a counter that is not an integer means
 # something clobbered it, and a score built on that would be fiction. Fail

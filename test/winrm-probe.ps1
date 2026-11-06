@@ -16,17 +16,32 @@
     certificate is not checked: the question is what the service accepts,
     not who it is.
 
-    Then the same account connects with Invoke-Command and the default
-    authentication (Negotiate). It must still get in: that proves the account
-    and the service are fine, so a 401 above is about Basic and nothing else
-    - and that hardening did not cut the administration channel.
+    Two witnesses then make a 401 mean "Basic refused" and nothing else: the
+    password itself is right (a network logon with it succeeds - LogonUser,
+    LOGON32_LOGON_NETWORK), and the service still lets an administrator in
+    with Negotiate - the CALLER, who runs this elevated (Invoke-Command to
+    localhost with no -Credential), which also shows hardening did not cut
+    the administration channel.
+
+    The witness used to be the probe account's own Negotiate session, until
+    step 34: a LOCAL administrator logging on over the network now gets a
+    filtered token, and WinRM refuses it whatever the scheme - measured,
+    Invoke-Command and Test-WSMan "Access is denied" and a raw Negotiate
+    POST 401, with the right password as with a wrong one. The Basic POSTs
+    above are not affected: the probe account's right password still got
+    HTTP 500 on HTTPS with the filter on. On the CI runner the caller is the
+    built-in Administrator, which the filter exempts (measured); a caller
+    that is itself a local administrator other than that one is refused by
+    step 34, and the probe says so instead of passing.
 
     Returns one object: Result = REFUSED (every listener answered 401 to the
-    right password, and Negotiate got in), ACCEPTED (some listener took the
-    password - Detail names it), NOT-RUNNING (the WinRM service is stopped:
-    nothing listens to take a header), or SETUP-FAILED (no listener, no user,
-    or Negotiate failed too - a FAILED proof, never a pass). The user is
-    removed and the certificate callback restored whatever happens.
+    right password, the password is right, and Negotiate let the caller in),
+    ACCEPTED (some listener took the password - Detail names it),
+    NOT-RUNNING (the WinRM service is stopped: nothing listens to take a
+    header), or SETUP-FAILED (no listener, no user, a password that does not
+    log on, or Negotiate refused the caller too - a FAILED proof, never a
+    pass). The user is removed and the certificate callback restored
+    whatever happens.
 
 .NOTES
     ASCII ONLY (see harden.ps1).
@@ -55,11 +70,6 @@ if ($listeners.Count -eq 0) { return (New-ProbeResult 'SETUP-FAILED' 'WinRM is r
 
 $user = 'whWinRm' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $pw = 'Wr-' + [guid]::NewGuid().ToString('N') + '-a7Z!'
-# Built char by char: ConvertTo-SecureString -AsPlainText is a PSScriptAnalyzer
-# error, and the password is a random throwaway that dies with the account.
-$sec = New-Object System.Security.SecureString
-foreach ($ch in $pw.ToCharArray()) { $sec.AppendChar($ch) }
-$sec.MakeReadOnly()
 $oldCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
 $oldProtocol = [Net.ServicePointManager]::SecurityProtocol
 try {
@@ -91,21 +101,48 @@ try {
         $answers += "$($l.Transport) $($l.Port): HTTP $code"
         if ($code -ne 401) { $took += "$($l.Transport) $($l.Port) (HTTP $code)" }
     }
-    $cred = New-Object System.Management.Automation.PSCredential($user, $sec)
-    $who = $null
-    $neg = 'no output from whoami'
-    try {
-        $who = Invoke-Command -ComputerName localhost -Credential $cred -ScriptBlock { whoami } -ErrorAction Stop
-    } catch {
-        $neg = $_.Exception.Message.Split("`n")[0]
-    }
     if ($took.Count -gt 0) {
         return (New-ProbeResult 'ACCEPTED' "the right password in a Basic header was taken on $($took -join ', ') [$($answers -join '; ')]")
     }
-    if (-not $who) {
-        return (New-ProbeResult 'SETUP-FAILED' "every listener said 401, but Negotiate failed too, so the 401s prove nothing about Basic: $neg")
+    # Witness 1: the password is right. A network logon is what the Basic
+    # header would have asked for, and LogonUser does not care whether the
+    # token it hands back is filtered (step 34).
+    if (-not ('WhWinRmProbeLogon' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WhWinRmProbeLogon {
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool LogonUser(string user, string domain, string password, int type, int provider, out IntPtr token);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    // 3 = LOGON32_LOGON_NETWORK, 0 = default provider. 0 = success, else the Win32 error.
+    public static int Check(string user, string password) {
+        IntPtr token;
+        if (!LogonUser(user, ".", password, 3, 0, out token)) { return Marshal.GetLastWin32Error(); }
+        CloseHandle(token);
+        return 0;
     }
-    return (New-ProbeResult 'REFUSED' "Basic refused with the right password [$($answers -join '; ')]; Negotiate still gets in as $who")
+}
+'@
+    }
+    $logonErr = [WhWinRmProbeLogon]::Check($user, $pw)
+    if ($logonErr -ne 0) {
+        return (New-ProbeResult 'SETUP-FAILED' "every listener said 401, but the account's own network logon failed too (Win32 error $logonErr), so the 401s prove nothing about Basic")
+    }
+    # Witness 2: the service still lets an administrator in over Negotiate -
+    # the caller, not the probe account (see the description: step 34).
+    $who = $null
+    $neg = 'no output from whoami'
+    try {
+        $who = Invoke-Command -ComputerName localhost -ScriptBlock { whoami } -ErrorAction Stop
+    } catch {
+        $neg = $_.Exception.Message.Split("`n")[0]
+    }
+    if (-not $who) {
+        return (New-ProbeResult 'SETUP-FAILED' "every listener said 401 and the password is right, but Negotiate refused the caller too, so the 401s may be the service and not Basic (a local administrator other than the built-in one is refused by step 34 - run this as the built-in Administrator or a domain account): $neg")
+    }
+    return (New-ProbeResult 'REFUSED' "Basic refused with the right password [$($answers -join '; ')]; the password logs on over the network, and Negotiate still lets the caller in as $who")
 } finally {
     [Net.ServicePointManager]::ServerCertificateValidationCallback = $oldCallback
     [Net.ServicePointManager]::SecurityProtocol = $oldProtocol

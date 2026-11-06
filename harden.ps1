@@ -167,6 +167,16 @@
          did not. The optional feature is removed (no reboot, measured);
          Server 2025 ships no 2.0 engine at all (-Version 2 runs the
          current one), so there the step has nothing to do.
+     34. UAC remote restrictions for local accounts: a LOCAL administrator
+         logging on over the network gets a filtered token, so its password
+         - or its hash, pass-the-hash - no longer opens C$, ADMIN$ or an
+         admin WinRM session. Measured on Server 2025 and 2022: the image
+         ships LocalAccountTokenFilterPolicy = 1 and a throwaway local admin
+         opened all three; with 0 all three are "Access is denied" while
+         IPC$ still opens. The built-in Administrator (RID 500) is exempt
+         (measured). A run that came in over WinRM as a local administrator
+         is not cut off from its own channel: the step is left to the
+         operator.
 
 .PARAMETER BannerCaption
     Title of the logon banner (step 28). Default: 'Authorized use only'.
@@ -227,6 +237,7 @@ param(
     [switch]$NoWinRm,
     [switch]$NoWinRmRunAs,
     [switch]$NoPowerShellV2,
+    [switch]$NoLocalAccountTokenFilter,
     [ValidateNotNullOrEmpty()][string]$BannerCaption = 'Authorized use only',
     [ValidateNotNullOrEmpty()][string]$BannerText = ('This system is for the use of authorized users only. ' +
         'Activity on it is monitored and recorded. By continuing you consent to that monitoring; ' +
@@ -247,6 +258,9 @@ $Script:RebootNeeded = @()
 # Steps 31-32 write WinRM policy, which the running service only reads at
 # start (measured): they raise this, and WinRM is restarted ONCE after both.
 $Script:WinRmPolicyChanged = $false
+# Steps this run declined because applying them here would cut the session
+# that is running it off (step 34 over WinRM). Reported at the end too.
+$Script:LeftForOperator = @()
 
 function Write-Step { param([string]$Message) Write-Host "[*] $Message" -ForegroundColor Cyan }
 function Write-Ok { param([string]$Message) Write-Host "[+] $Message" -ForegroundColor Green }
@@ -1469,6 +1483,76 @@ function Remove-PowerShellV2 {
     Write-Ok 'powershell -Version 2 no longer starts an engine that script-block logging cannot see'
 }
 
+# ---- Step 34: UAC remote restrictions for local accounts --------------------
+
+# Why a run must not apply step 34 to itself: it came in over WinRM
+# ($PSSenderInfo, read with Get-Variable because of StrictMode) as a LOCAL
+# account other than the built-in Administrator. Measured: with the policy
+# at 0 such an account's next WinRM session is "Access is denied" - the
+# operator would lose the very channel that ran the script. Returns '' when
+# applying is safe, the reason otherwise. A local account is named
+# COMPUTERNAME\user; a domain account is not filtered, and RID 500 is exempt.
+function Get-TokenFilterLockoutReason {
+    if (-not (Get-Variable -Name PSSenderInfo -ErrorAction SilentlyContinue)) { return '' }
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($id.User.Value -match '-500$') { return '' }
+    if ($id.Name -notlike "$env:COMPUTERNAME\*") { return '' }
+    "this run came in over WinRM as the local account $($id.Name), whose next remote session the policy would refuse"
+}
+
+function Set-LocalAccountTokenFilter {
+    if ($NoLocalAccountTokenFilter) { Write-Skip 'Skipping UAC remote restrictions for local accounts'; return }
+    Write-Step 'Filtering the token of local administrators who log on over the network (UAC remote restrictions)'
+    # Over the network, a LOCAL administrator's password - or just its NTLM
+    # hash, which is all pass-the-hash needs - is a full administrator token
+    # when LocalAccountTokenFilterPolicy = 1: the admin shares, PsExec-style
+    # service creation, an elevated WinRM session. With 0 (or absent) UAC
+    # filters that token like it filters an interactive one, and remote
+    # administration with local accounts stops. Microsoft's security
+    # baseline: "Apply UAC restrictions to local accounts on network logons".
+    #
+    # Measured on the runner (Server 2025 and 2022, probe branch): the image
+    # ships 1. A throwaway local administrator opened C$ and ADMIN$ on the
+    # box's own IPv4 and got a High-integrity WinRM session; with 0, and with
+    # the value absent, C$ and ADMIN$ answered "System error 5 ... Access is
+    # denied", WinRM "Access is denied" (a raw Negotiate POST got 401 with
+    # the right password), and IPC$ still opened - the password is fine, the
+    # token is not admin. Unlike SAM (step 22) the filter applies to
+    # \\127.0.0.1 too. It takes effect for the next logon, no reboot.
+    #
+    # Said out loud: the built-in Administrator (RID 500) is EXEMPT - the
+    # runner's own still opened C$ and WinRM with the policy at 0 - unless
+    # Admin Approval Mode covers it (FilterAdministratorToken = 1, not applied
+    # here: on the CI runner it is the account running everything; the audit
+    # grades it). Domain accounts are not filtered either (documented, not
+    # measurable without a domain): this is about LOCAL accounts.
+    $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    $cur = $null
+    try { $cur = (Get-ItemProperty -LiteralPath $sys -Name 'LocalAccountTokenFilterPolicy' -ErrorAction Stop).LocalAccountTokenFilterPolicy } catch { $cur = $null }
+    if ($cur -ne 0) {
+        $lockout = Get-TokenFilterLockoutReason
+        if ($lockout) {
+            Write-Warn2 "NOT applied: $lockout. Run this step from a console, as the built-in Administrator or as a domain account."
+            $Script:LeftForOperator += 'UAC remote restrictions for local accounts (step 34): this run came in over WinRM as a local administrator'
+            return
+        }
+        # Name who loses remote administration, like step 32 names its
+        # endpoints: local members of Administrators other than RID 500.
+        $losers = @()
+        try {
+            $losers = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
+                Where-Object { "$($_.PrincipalSource)" -eq 'Local' -and $_.ObjectClass -eq 'User' -and "$($_.SID.Value)" -notmatch '-500$' } |
+                ForEach-Object { $_.Name })
+        } catch { $losers = @() }
+        if ($losers.Count -gt 0) {
+            Write-Warn2 "these local administrators stop administering this box over the network (admin shares, WinRM, PsExec-style tools): $($losers -join ', ')"
+        }
+    }
+    Set-RegistryValue -Path $sys -Name 'LocalAccountTokenFilterPolicy' -Value 0 `
+        -Because 'a local administrator logging on over the network gets a filtered token' | Out-Null
+    Write-Ok 'A local administrator password (or hash) is no longer remote administration'
+}
+
 # ---- Main ------------------------------------------------------------------
 
 function Invoke-Main {
@@ -1511,6 +1595,7 @@ function Invoke-Main {
     if (-not $NoWinRm) { Write-Host '    - WinRM: no Basic authentication, no unencrypted traffic (service and client)' }
     if (-not $NoWinRmRunAs) { Write-Host '    - WinRM: no stored RunAs credentials (endpoints that rely on them stop working)' }
     if (-not $NoPowerShellV2) { Write-Host '    - PowerShell 2.0 engine removed (no downgrade past script-block logging)' }
+    if (-not $NoLocalAccountTokenFilter) { Write-Host '    - UAC remote restrictions: local administrators get a filtered token over the network' }
     if ($DryRun) { Write-Warn2 'DRY-RUN: nothing will be changed.' }
     if (-not $Yes -and -not $DryRun) {
         $answer = Read-Host 'Proceed? [y/N]'
@@ -1552,6 +1637,7 @@ function Invoke-Main {
     Disable-WinRmRunAs
     Restart-WinRmForPolicy
     Remove-PowerShellV2
+    Set-LocalAccountTokenFilter
 
     Write-Host ''
     # Write-OUTPUT, not Write-Host: this line is the script's machine-readable
@@ -1564,6 +1650,10 @@ function Invoke-Main {
     if ($Script:RebootNeeded.Count -gt 0) {
         Write-Warn2 'A reboot is needed before these take full effect:'
         foreach ($r in ($Script:RebootNeeded | Select-Object -Unique)) { Write-Host "      - $r" }
+    }
+    if ($Script:LeftForOperator.Count -gt 0) {
+        Write-Warn2 'Left for the operator (applying them here would cut this session off):'
+        foreach ($r in ($Script:LeftForOperator | Select-Object -Unique)) { Write-Host "      - $r" }
     }
     Write-Ok 'Done. Verify with: .\test\verify.ps1   Score with: .\test\audit.ps1'
 }
