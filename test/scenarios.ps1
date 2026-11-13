@@ -104,9 +104,10 @@ $scenarios = @(
        Probe  = { (Get-RegValue $rdp UserAuthentication) -eq 0 }
        Desc   = 'RDP without NLA survives' }
     @{ Switch = 'NoAuditPolicy'
-       Plant  = { auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:disable /failure:disable | Out-Null }
-       Probe  = { (Get-AuditLogonValue) -eq '0' }
-       Desc   = 'the un-audited Logon subcategory survives' }
+       Plant  = { auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:disable /failure:disable | Out-Null
+                  New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name SCENoApplyLegacyAuditPolicy -Value 0 -PropertyType DWord -Force | Out-Null }
+       Probe  = { (Get-AuditLogonValue) -eq '0' -and (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' SCENoApplyLegacyAuditPolicy) -eq 0 }
+       Desc   = 'the un-audited Logon subcategory and SCENoApplyLegacyAuditPolicy = 0 survive' }
     @{ Switch = 'NoAutoRun'
        Plant  = { New-ItemProperty -Path $explorerPol -Name NoDriveTypeAutoRun -Value 0x91 -PropertyType DWord -Force | Out-Null }
        Probe  = { (Get-RegValue $explorerPol NoDriveTypeAutoRun) -eq 0x91 }
