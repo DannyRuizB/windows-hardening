@@ -62,6 +62,8 @@ jobs:
           "LimitBlankPasswordUse as shipped: $(if ($null -eq $lbpu) { '<absent>' } else { $lbpu })"
           $blank = .\test\blank-password-probe.ps1
           "blank-password network logon as shipped: $($blank.Result) - $($blank.Detail)"
+          $scen = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name SCENoApplyLegacyAuditPolicy -ErrorAction SilentlyContinue).SCENoApplyLegacyAuditPolicy
+          "SCENoApplyLegacyAuditPolicy as shipped: $(if ($null -eq $scen) { '<absent>' } else { $scen })"
           # Step 24: measured, the image ships DisableDomainCreds = 0 - the box
           # as it comes IS the offender, and the probe verify runs must get a
           # network password saved here, or its later DENIED would prove nothing.
@@ -172,6 +174,29 @@ jobs:
           New-ItemProperty -Path $rdp -Name SecurityLayer -Value 1 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $rdp -Name MinEncryptionLevel -Value 2 -PropertyType DWord -Force | Out-Null
           "planted RDP UserAuthentication=0, SecurityLayer=1, MinEncryptionLevel=2"
+          # Step 9's SCENoApplyLegacyAuditPolicy: the image ships it absent,
+          # which was measured to hold like 1, so the 0 a tool or a GPO leaves
+          # is planted - and with Logon auditing success AND failure, the SAME
+          # probe verify runs must see a legacy "logon events: success"
+          # template take failure auditing away (no 4625), or its later HELD
+          # would prove nothing. It runs BEFORE the No Auditing plant below.
+          auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable | Out-Null
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name SCENoApplyLegacyAuditPolicy `
+            -Value 0 -PropertyType DWord -Force | Out-Null
+          $legacy = .\test\legacy-audit-probe.ps1
+          "planted SCENoApplyLegacyAuditPolicy = 0; probe: $($legacy.Result) - $($legacy.Detail)"
+          if ($legacy.Result -ne 'OVERRIDDEN') { throw "a legacy template did not override the subcategories even with SCENoApplyLegacyAuditPolicy = 0 ($($legacy.Result)) - its HELD after hardening would prove nothing" }
+          # The probe puts the policy back (auditpol /restore of its own
+          # backup): the failure auditing the template just took away must be
+          # here again, or verify run on an unhardened box would leave it
+          # blinder than it found it.
+          $csvAfter = Join-Path $env:TEMP 'legacy-restore-check.csv'
+          auditpol /backup /file:"$csvAfter" | Out-Null
+          $logonAfter = ((Get-Content $csvAfter | Select-String '0cce9215' | Select-Object -First 1).Line -split ',')[-1]
+          Remove-Item $csvAfter -ErrorAction SilentlyContinue
+          "after the probe: Restored=$($legacy.Restored), Logon subcategory back to $logonAfter"
+          if (-not $legacy.Restored -or $logonAfter -ne '3') { throw "the legacy-audit probe did not put the audit policy back (Restored=$($legacy.Restored), Logon=$logonAfter, expected 3)" }
+          $global:LASTEXITCODE = 0
           # Measured: the image ships Logon = Success and Failure (3) and
           # Process Creation = Success (1) already - without planting, most of
           # the audit-policy step would be tautological. Plant No Auditing on
@@ -361,6 +386,8 @@ jobs:
           if ($rsamDry -ne 'O:BAG:BAD:(A;;RC;;;WD)') { throw "dry run changed RestrictRemoteSAM to $rsamDry" }
           $lbpuDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LimitBlankPasswordUse).LimitBlankPasswordUse
           if ($lbpuDry -ne 0) { throw "dry run changed LimitBlankPasswordUse to $lbpuDry" }
+          $scenDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name SCENoApplyLegacyAuditPolicy).SCENoApplyLegacyAuditPolicy
+          if ($scenDry -ne 0) { throw "dry run changed SCENoApplyLegacyAuditPolicy to $scenDry" }
           $ddcDry = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name DisableDomainCreds -ErrorAction SilentlyContinue).DisableDomainCreds
           if ($ddcDry -eq 1) { throw "dry run set DisableDomainCreds" }
           if ((Get-SmbServerConfiguration).EncryptData) { throw "dry run turned SMB encryption on" }

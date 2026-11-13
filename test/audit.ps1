@@ -151,9 +151,13 @@ if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Au
 if (((Get-AuditValue '{0CCE922F-69AE-11D9-BED3-505054503030}') -band 1) -eq 1) {
     P 'Changes to the audit policy itself are audited (event 4719)'
 } else { W 'Audit-policy changes go unrecorded' 'run harden.ps1 (audit policy step)' }
-if ((Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'SCENoApplyLegacyAuditPolicy') -eq 1) {
-    P 'Subcategory audit policy overrides the legacy categories'
-} else { W 'Legacy category policy can silently override the subcategories' 'run harden.ps1 (audit policy step)' }
+# Measured on 2022 and 2025: absent (what Windows ships) held exactly like 1;
+# 0 let a legacy "logon events: success" template erase failure auditing,
+# and failed logons stopped writing 4625.
+$scen = Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'SCENoApplyLegacyAuditPolicy'
+if ($null -eq $scen -or [int]$scen -eq 1) {
+    P "Subcategory audit policy overrides the legacy categories (SCENoApplyLegacyAuditPolicy = $(if ($null -eq $scen) { '<absent>, the Windows default' } else { $scen }))"
+} else { F "A legacy category policy (a basic-audit GPO) silently overrides the subcategories (SCENoApplyLegacyAuditPolicy = $scen): failed logons can stop writing 4625" 'run harden.ps1 (audit policy step)' }
 
 Write-Host '-- Accounts --------------------------------------------------'
 $acct = (net accounts) | Out-String

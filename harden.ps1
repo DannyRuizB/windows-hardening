@@ -42,7 +42,10 @@
       9. Advanced audit policy: logons (success AND failure), process
          creation with the full command line, and changes to the audit
          policy itself. Steps 1-8 shrink the attack surface; this one makes
-         whatever still happens VISIBLE. Detection, not prevention.
+         whatever still happens VISIBLE. Detection, not prevention. Plus
+         SCENoApplyLegacyAuditPolicy = 1: measured, with it at 0 a legacy
+         "logon events: success" template (a basic-audit GPO) silently
+         took failure auditing away and failed logons stopped writing 4625.
      10. AutoRun/AutoPlay off: no drive type gets to run code by being
          plugged in or inserted. NoDriveTypeAutoRun 0xFF, autorun.inf never
          processed, no autoplay for non-volume devices. The USB-stick
@@ -622,6 +625,12 @@ function Set-AuditPolicy {
         -Because 'event 4688 carries the full command line' | Out-Null
     # Without this, the legacy 9-category policy silently overrides the
     # subcategories above the moment a GPO or secedit template touches it.
+    # Measured on Server 2022 and 2025 with SCENoApplyLegacyAuditPolicy = 0:
+    # a template saying "logon events: success" turned Logon into Success
+    # only, and a failed logon wrote NO 4625. At 1, or absent (what Windows
+    # ships), the subcategory held. The value is written explicitly so a 0
+    # left by a tool or a GPO cannot stand; verify proves it with that
+    # template (test/legacy-audit-probe.ps1).
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' `
         -Name 'SCENoApplyLegacyAuditPolicy' -Value 1 `
         -Because 'subcategory settings win over legacy categories' | Out-Null

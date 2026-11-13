@@ -274,6 +274,16 @@ foreach ($attempt in 1..10) {
 if ($logonFound) { Pass 'a failed logon really lands in event 4625 (the probe username was recorded)' }
 else { Fail 'the failed-logon probe did not land in event 4625' }
 
+# Behavioural, the guard of everything above: a LEGACY category template - a
+# basic-audit GPO saying "logon events: success" - applied for real. The e2e
+# planted SCENoApplyLegacyAuditPolicy = 0 and measured the same probe
+# OVERRIDDEN (failure auditing gone, no 4625); hardened, it must hold.
+$legacy = & (Join-Path $PSScriptRoot 'legacy-audit-probe.ps1')
+Write-Host "        legacy-audit probe: $($legacy.Result) - $($legacy.Detail)"
+if ($legacy.Result -eq 'HELD') { Pass 'a legacy "logon events: success" template cannot take failure auditing away (4625 still lands)' }
+elseif ($legacy.Result -eq 'OVERRIDDEN') { Fail "a legacy category template overrode the subcategories: $($legacy.Detail)" }
+else { Fail "the legacy-audit probe did not prove anything ($($legacy.Result)): $($legacy.Detail)" }
+
 Write-Host '== AutoRun / AutoPlay ==' -ForegroundColor White
 # Machine policy values ARE the mechanism here (Explorer reads them at
 # insertion time), so the registry check is the effective check - the
